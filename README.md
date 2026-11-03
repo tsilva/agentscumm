@@ -1,5 +1,7 @@
 # AgentSCUMM
 
+<img src="logo.png" alt="AgentSCUMM Cursor Detective logo" width="256" />
+
 An experiment in getting an agent to finish point-and-click adventures through ScummWEB.
 
 Beneath a Steel Sky (the earlier bass-agent idea) belongs to this project. ScummWEB remains the browser game runtime in the separate [scummweb](../scummweb/) repository; this repository owns agent interaction and experiments.

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "profiles": [],
+  "sources": [
+    {
+      "path": "image-assets/sources/logo-source.png",
+      "sha256": "739f455a2abda0d469fe7065cd758925c9f8c3b5ab959946a9feec199ce3dec9",
+      "evidence": "Generated with native Codex ImageGen. The original PNG contains embedded Content Credentials data."
+    }
+  ],
+  "exports": [
+    {
+      "role": "readme-logo",
+      "path": "logo.png",
+      "sha256": "77333c62ffa71416d38c993eaf8edbdfdfc60064ae9a426282eb4732bbaf4316",
+      "source": "image-assets/sources/logo-source.png"
+    }
+  ]
+}
