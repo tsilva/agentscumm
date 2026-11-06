@@ -80,6 +80,12 @@ in the workspace and must preserve others' files. They may not delegate or edit
 tracked files. Record the returned agent IDs against their trials. Do not send
 gameplay hints mid-trial.
 
+Include the worker contract's stdin-preserving client launch example in each
+dispatch. Require a persistent PTY and a successful `status` response through
+the same live connection before game launch. Do not supply the Python launcher
+through a heredoc: the client inherits that exhausted stdin and closes before
+it can receive MCP requests.
+
 Each trial's `client-args.json` configures the maintained Play Game
 `scripts/mcp-client.mjs`, explicitly including this endpoint:
 

@@ -16,9 +16,25 @@ startup tools and immutable prompt assets in `initial-context.json`, create
 with `dirty: false`. Record connection route, provenance, client tool-session ID,
 PID and server PID. A stale or dirty revision blocks this trial.
 
-Start the maintained Play Game client with `client-args.json` using an argument
-array or proper shell quoting. Keep stdin alive. Use a fresh process/profile;
-do not add `--resume`. Start `flight-of-the-amazon-queen` with `mode: "skip_intro"`,
+Start the maintained Play Game client in a persistent PTY (`exec_command` with
+`tty: true`) from the repository root. Load `client-args.json` without consuming
+the stdin that the client needs for later MCP requests. For example, replace
+`TRIAL_DIRECTORY` with your absolute assigned path:
+
+```sh
+python3 -c 'import json,os,sys; os.execvp("node", ["node", ".agents/skills/agentscumm_play-game/scripts/mcp-client.mjs", *json.load(open(sys.argv[1]))])' TRIAL_DIRECTORY/client-args.json
+```
+
+Use `python3 -c`, a direct argument array, or equivalently stdin-preserving
+launching. Do not use `python3 - <<...`, a one-shot pipe, or stdin redirection:
+the client would inherit EOF and close immediately. Retain the returned process
+session and send subsequent JSON lines with `write_stdin`. After `ready`, send
+`{"name":"status","arguments":{}}` through that same session immediately.
+Verify the response, server PID, and clean required revision before launching a
+game; a `ready` line alone does not establish a usable connection.
+
+Use a fresh process/profile; do not add `--resume`.
+Start `flight-of-the-amazon-queen` with `mode: "skip_intro"`,
 poll readiness, and play using MCP screenshots/controls. Follow your strategy
 within the common permissions/assistance policy. Ground dependent actions in
 actual screenshots; a prediction is not an observation. Preserve failed actions
