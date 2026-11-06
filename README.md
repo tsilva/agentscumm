@@ -34,7 +34,7 @@ $agentscumm_play-game Flight of the Amazon Queen
 
 Commit all checkout changes before starting or resuming play. The skill stops on staged, unstaged, or untracked changes; once the checkout is clean, it immediately creates the working run folder with the verified commit recorded in `run.json`.
 
-Before gameplay, the skill synchronizes the current branch and verifies that the attached MCP loaded that clean revision. Codex handles stale-server restarts and reconnection itself, using local lifecycle controls, and verifies the replacement before playing; see [usage and controls](docs/usage.md#play-game-skill).
+Before gameplay, the skill synchronizes the current branch and verifies that the MCP loaded that clean revision. Codex handles stale-server restarts and uses the included local MCP client automatically if the attached connection is unavailable; see [usage and controls](docs/usage.md#play-game-skill).
 
 The game loads, a read-only spectator opens, and Codex starts playing toward the ending. You can request a milestone, pause, or resume a saved run. Closing the spectator leaves the game running; closing the MCP server ends the active session. Recovery depends on saves made inside the game.
 
