@@ -122,14 +122,18 @@ copies. The server uses ScummWEB’s normal game ZIP input and its existing scan
 handling. It does not extract game files itself or upload ZIPs to a server.
 
 Imported entries appear in `list_games` with `source: "local_import"`. Launch their returned `slug`
-with `session(operation="start", game="...")`; the server selects the library card and its Play
-or Continue action instead of requesting a nonexistent bundled play route. Imported games do not
+with `session(operation="start", game="...")`; all games use `/<slug>/play` on the configured
+base URL. If that route requests local files,
+the server reattaches the registered ZIPs through its importer and activates the route’s
+Play or Continue action. It never navigates through homepage cards or assumes that a
+game title appears in the launch button’s accessible name. Imported games do not
 have intro checkpoints, so `skip_intro` launches their beginning.
 
 The original ZIPs remain where they are. Keep the source disk mounted and preserve the paths.
 The browser file-input fallback provides tab-local File objects rather than persistent file
 handles. The instance records paths and catalog entries in `local-library.json` under its own
-data directory, and reattaches those ZIPs through the importer when it needs a new library tab.
+data directory, and reattaches those ZIPs through the importer when a direct game route
+requests its source files.
 It does not copy the whole collection into the instance or inherit another instance’s imports.
 Library registration does not verify that each game can reach its ending.
 

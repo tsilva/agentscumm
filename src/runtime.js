@@ -12,7 +12,7 @@ import { SpectatorViewer } from './viewer.js';
 import { installHealthObserver, readShellState, bounded } from './health.js';
 import { installDisplayObserver, displayBounds, captureBounds } from './display.js';
 import { claimDataDir } from './instances.js';
-import { readLibrary, validateZipPaths, importZipFiles, saveLibrary } from './library.js';
+import { readLibrary, validateZipPaths, importZipFiles, saveLibrary, launchReattachedGame } from './library.js';
 import { enableEvaluation, readEvaluation } from './evaluation.js';
 
 export const games = [
@@ -240,8 +240,7 @@ export class GameRuntime {
     for (const page of this.context.pages()) {
       if (page !== this.libraryPage) await page.close();
     }
-    this.page = this.importedGame && this.libraryPage && !this.libraryPage.isClosed()
-      ? this.libraryPage : await this.context.newPage();
+    this.page = await this.context.newPage();
     const page = this.page;
     await page.addInitScript(installHealthObserver);
     await page.addInitScript(installDisplayObserver);
@@ -264,39 +263,25 @@ export class GameRuntime {
     if (this.viewerMode) {
       try { await this.viewer.open(); } catch (error) { this.viewerError = error.message; }
     }
-    if (this.importedGame) {
-      if (page !== this.libraryPage) {
-        this.libraryPage = page;
-        const response = await page.goto(new URL('/', this.baseUrl).href,
-          { waitUntil: 'domcontentloaded', timeout: remaining() });
-        if (response && !response.ok()) throw new Error(`Library route returned HTTP ${response.status()}`);
-        const saved = await readLibrary(this.dataDir);
-        await importZipFiles(page, await validateZipPaths(saved.paths), remaining());
-      }
-      const href = this.importedGame.href;
-      // href is taken from the rendered library, not synthesized from a filename.
-      const links = page.locator('#library a');
-      let selected = false;
-      for (let index = 0; index < await links.count(); index++) {
-        if (await links.nth(index).getAttribute('href') === href) {
-          await links.nth(index).click(); selected = true; break;
-        }
-      }
-      if (!selected) throw new Error('Imported game is no longer present in the library; import its ZIP again');
-      await page.getByRole('button', { name: `${this.launchMode === 'continue' ? 'Continue' : 'Play'} ${this.importedGame.title}`, exact: true })
-        .click({ timeout: remaining() });
-      await page.waitForURL(url => url.pathname === '/local/play', { timeout: remaining() });
-      this.gameUrl = page.url();
-    } else {
-      const response = await page.goto(this.gameUrl, { waitUntil: 'domcontentloaded', timeout: remaining() });
-      if (response && !response.ok()) throw new Error(`Game route returned HTTP ${response.status()}`);
-    }
+    const response = await page.goto(this.gameUrl, { waitUntil: 'domcontentloaded', timeout: remaining() });
+    if (response && !response.ok()) throw new Error(`Game route returned HTTP ${response.status()}`);
     // ScummWEB's web-player controls are not part of the game or MCP input surface.
     await page.addStyleTag({ content: '.game-route-controls,.game-route-bottom-actions,.game-route-touch-cursor-pad-shell{display:none!important}' });
-    let renderedSamples = 0, startupToken;
+    let renderedSamples = 0, startupToken, filesReattached = false;
     while (performance.now() < deadline && this.sessionId === sessionId && !this.closing) {
       if (this.phase === 'disconnected' || this.phase === 'error') throw new Error(this.message);
       const shell = page.frames().find(frame => frame !== page.mainFrame() && /\/scummvm\.html(?:[?#]|$)/.test(frame.url()));
+      // All games start at their own route. An imported source without a
+      // persistent file handle renders ScummWEB's reconnect/import UI there.
+      if (!shell && !filesReattached && await page.locator('.library-add-card').isVisible().catch(() => false)) {
+        const saved = await readLibrary(this.dataDir);
+        if (!saved.paths.length) throw new Error('This game requires a local ZIP; import it with the library tool first');
+        this.bootPhase = 'reconnecting-game-files';
+        await importZipFiles(page, await validateZipPaths(saved.paths), remaining());
+        filesReattached = true;
+        this.bootPhase = 'starting-imported-game';
+        await launchReattachedGame(page, this.launchMode, remaining());
+      }
       if (shell) {
         if (this.shell !== shell) {
           this.shell = shell;

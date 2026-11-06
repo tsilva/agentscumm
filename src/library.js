@@ -64,6 +64,21 @@ export async function importZipFiles(page, paths, timeout = 600000) {
   return { summary, items, games };
 }
 
+// This is only the direct route's file-reconnection UI. Never navigate via
+// homepage cards or depend on a game title being part of a button name.
+export async function launchReattachedGame(page, mode, timeout) {
+  const primary = page.locator('.hero-launch .launch-button:visible').first();
+  await primary.waitFor({ state: 'visible', timeout });
+  const name = (await primary.innerText()).trim();
+  if (!['Play', 'Continue'].includes(name)) throw new Error(`Game source is not ready to launch: ${name}`);
+  const fresh = page.locator('.hero-launch .start-fresh-button:visible').first();
+  if (mode !== 'continue' && name === 'Continue') {
+    await fresh.click({ timeout });
+  } else {
+    await primary.click({ timeout });
+  }
+}
+
 export async function saveLibrary(dataDir, previous, paths, result) {
   const saved = { schema_version: 1, imported_at: new Date().toISOString(),
     paths: [...new Set([...previous.paths, ...paths])], games: result.games,

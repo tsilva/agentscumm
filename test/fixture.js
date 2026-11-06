@@ -1,9 +1,11 @@
 import http from 'node:http';
 
-export async function startFixture({ navigationDelay = 0, startupDelay = 600, documentDelay = 0, library = false, evaluation = false } = {}) {
+export async function startFixture({ navigationDelay = 0, startupDelay = 600, documentDelay = 0, library = false, libraryContinue = false, evaluation = false } = {}) {
+  const requests = [];
   const server = http.createServer((request, response) => {
+    requests.push(request.url);
     response.setHeader('Content-Type', 'text/html');
-    if (library && request.url === '/') {
+    if (library && (request.url === '/' || /^\/[a-z0-9-]+\/play/.test(request.url))) {
       response.end(`<!doctype html><html><body>
         <input type="file" accept=".zip,application/zip" aria-label="Choose save backup ZIP">
         <button class="library-add-card">Add a game</button>
@@ -21,10 +23,15 @@ export async function startFixture({ navigationDelay = 0, startupDelay = 600, do
             if([...document.querySelectorAll('#library a')].some(a=>a.getAttribute('href')===href)){skipped++;continue;}
             const div=document.createElement('div');div.className='poster-entry';div.dataset.librarySourceIds=JSON.stringify([title]);
             const a=document.createElement('a');a.href=href;a.innerHTML='<span class="poster-title">'+title+'</span>';
-            a.onclick=event=>{event.preventDefault();document.getElementById('hero').innerHTML='<button aria-label="Play '+title+'">Play</button>';
-              document.querySelector('#hero button').onclick=()=>{history.pushState(null,'','/local/play');document.body.innerHTML='<iframe style="position:fixed;inset:0;width:100vw;height:100vh;border:0" src="/scummvm.html"></iframe>';};};
             div.append(a);document.getElementById('library').append(div);added++;
             rows.push('<li><strong>'+file.name+'</strong><p>Added to your library</p></li>');
+          }
+          if(location.pathname.endsWith('/play')){
+            document.getElementById('hero').innerHTML='<div class="hero-launch"><button class="launch-button" title="Play imported adventure">${libraryContinue ? 'Continue' : 'Play'}</button>${libraryContinue ? '<button class="start-fresh-button">Start from beginning</button>' : ''}</div>';
+            for(const button of document.querySelectorAll('#hero button'))button.onclick=()=>{
+              const kind=button.textContent==='Continue'?'continue':'beginning';
+              document.body.innerHTML='<iframe style="position:fixed;inset:0;width:100vw;height:100vh;border:0" src="/scummvm.html?launch='+kind+'"></iframe>';
+            };
           }
           document.getElementById('game-import-summary').textContent=added+' games added · '+skipped+' games skipped · '+errors+' errors';
           document.querySelector('.game-import-items').innerHTML=rows.join('');document.querySelector('dialog').showModal();event.target.value='';
@@ -68,5 +75,5 @@ export async function startFixture({ navigationDelay = 0, startupDelay = 600, do
     } else response.writeHead(404).end('Not found');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  return { url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise(resolve => server.close(resolve)) };
+  return { requests, url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise(resolve => server.close(resolve)) };
 }

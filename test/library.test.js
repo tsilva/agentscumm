@@ -9,7 +9,7 @@ import { startFixture } from './fixture.js';
 
 test('local ZIP import, site errors, instance persistence and imported game launch', { timeout: 60000 }, async t => {
   const folder = await mkdtemp(path.join(tmpdir(), 'agentscumm-library-'));
-  const fixture = await startFixture({ library: true });
+  const fixture = await startFixture({ library: true, libraryContinue: true });
   const options = { baseUrl: fixture.url, dataDir: path.join(folder, 'instance'), viewer: false };
   let runtime = new GameRuntime(options);
   t.after(async () => { await runtime.close(); await fixture.close(); await rm(folder, { recursive: true, force: true }); });
@@ -42,15 +42,29 @@ test('local ZIP import, site errors, instance persistence and imported game laun
 
   runtime = new GameRuntime(options);
   assert.ok((await runtime.listGames()).some(game => game.slug === entry.slug));
-  const started = await runtime.start({ game: entry.slug });
+  const requestStart = fixture.requests.length;
+  const started = await runtime.start({ game: entry.slug, mode: 'beginning' });
   const ready = await runtime.waitReady(20000);
   assert.equal(ready.phase, 'ready', ready.message);
   assert.equal(ready.sessionId, started.sessionId);
-  assert.match(ready.url, /\/local\/play$/);
+  assert.equal(ready.url, `${fixture.url}/${entry.slug}/play`);
+  assert.ok(fixture.requests.slice(requestStart).includes(`/${entry.slug}/play`));
+  assert.ok(!fixture.requests.slice(requestStart).includes('/'), 'Launch never detours through the homepage');
+  assert.match(runtime.shell.url(), /launch=beginning/);
   await assert.rejects(runtime.library({ operation: 'import', paths: [zip] }), /Close the active game/);
   await runtime.closeGame();
-  await runtime.start({ game: entry.slug });
+  await runtime.start({ game: entry.slug, mode: 'continue' });
   assert.equal((await runtime.waitReady(20000)).phase, 'ready');
+  assert.match(runtime.shell.url(), /launch=continue/);
+  assert.equal(runtime.gameUrl, `${fixture.url}/${entry.slug}/play#continue`);
+  await runtime.closeGame();
+  const secondZip = path.join(folder, 'Another Adventure.zip');
+  await writeFile(secondZip, 'second fixture');
+  await runtime.library({ operation: 'import', paths: [secondZip] });
+  await runtime.libraryTask;
+  await runtime.start({ game: 'another-adventure' });
+  assert.equal((await runtime.waitReady(20000)).phase, 'ready');
+  assert.equal(runtime.gameUrl, `${fixture.url}/another-adventure/play`);
 });
 
 
