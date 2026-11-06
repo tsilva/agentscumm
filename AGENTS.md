@@ -26,6 +26,18 @@ Before gameplay, the skill synchronizes the current branch with its configured u
 
 The gameplay skill uses only AgentSCUMM MCP tools to interact with games, through either the attached connection or the maintained local MCP client. Server implementation and backend selection belong to the MCP server; the skill may manage its process and connection for preflight and recovery, but must not change its implementation or substitute browser automation or direct game-runtime access. Local run records and web research such as walkthroughs remain allowed. Other browser work follows the user's normal Brave preference.
 
+## Autoresearch a gameplay strategy
+
+Use [$agentscumm_autoresearch](.agents/skills/agentscumm_autoresearch/SKILL.md)
+for one research round comparing up to three parallel gameplay subagents. Its
+display name is `agentscumm: Autoresearch`. The first task is fixed to Flight of
+the Amazon Queen's opening hotel and a launcher-configured laundry-room endpoint.
+Rank verified successes by total submitted primitive actions, report evidence
+and limitations, then wait for explicit user confirmation before another round.
+Each trial owns an isolated MCP process/profile and ignored run directory.
+Experiment conditions do not change normal launch or Play Game defaults.
+Creating or editing the skill alone does not start gameplay.
+
 ## Price a conversation
 
 Use [$agentscumm_price-thread](.agents/skills/agentscumm_price-thread/SKILL.md) to evaluate a Codex conversation's recorded token usage and calculate its hypothetical OpenAI API cost with the models actually used and current official rates. Its display name is `agentscumm: Price Thread`. This read-only analysis is separate from gameplay and requires no model API key. Report the usage cutoff, cache breakdown, context bands, and any processing-tier assumption; missing telemetry or pricing must remain explicit.

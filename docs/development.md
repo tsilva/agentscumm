@@ -8,7 +8,7 @@ pnpm test
 pnpm test:live
 ```
 
-`pnpm test` uses a synthetic local game and real owned Chromium sessions. It covers five-tool discovery and read-only annotations, fresh/exact/history observations, ordered in-sequence screenshots, partial captures and capture failures, byte-identical cached capture replay, MCP image responses, delayed startup, crop-relative click/move/drag delivery across canvas geometry changes, input validation, request deduplication, partial sequence failures, frame retention, spectator isolation, document replacement, relaunch, startup errors, MCP cancellation, and shutdown during an input wait. Health regressions include delayed iframe document parsing, real WebGL context loss, runtime aborts/traps, a stalled renderer, failure during a sequence without replay, wall-clock jumps, and a shared navigation/runtime startup deadline.
+`pnpm test` uses a synthetic local game and real owned Chromium sessions. It covers five-tool discovery and read-only annotations, fresh/exact/history observations, ordered in-sequence screenshots, partial captures and capture failures, byte-identical cached capture replay, MCP image responses, delayed startup, crop-relative click/move/drag delivery across canvas geometry changes, input validation, request deduplication, partial sequence failures, frame retention, spectator isolation, default-muted audio, footer sound toggling with rendered audio samples and same-origin request checks, document replacement, relaunch, startup errors, MCP cancellation, and shutdown during an input wait. Health regressions include delayed iframe document parsing, real WebGL context loss, runtime aborts/traps, a stalled renderer, failure during a sequence without replay, wall-clock jumps, and a shared navigation/runtime startup deadline.
 
 On macOS, the test suite also opens the native spectator, checks its app identity and loaded icon, verifies successive live-frame requests, and checks reuse, reopening, owner-loss cleanup, and server shutdown. This check needs a graphical desktop and Xcode Command Line Tools.
 
@@ -32,3 +32,12 @@ Runtime code is in `src/`: `index.js` exposes MCP, `runtime.js` owns the game li
 Dependency policy uses pnpm's seven-day minimum release age and blocks exotic transitive dependency sources. Lifecycle scripts are disabled; browser installation is an explicit step.
 
 Project considerations and future work live in the ignored root `INBOX.md`. Imported source notes remain in ignored `.local/repo-inbox/`; local-only material requires independent backup.
+
+The repository-owned `agentscumm_autoresearch` skill coordinates one round of up
+to three isolated players and uses its standard-library `scripts/research.py`
+helper to prepare and score evidence. `pnpm test:autoresearch` runs synthetic
+evidence tests without launching games or calling models. They cover isolated
+starting manifests, opt-in endpoint arguments, clean-checkout refusal, pending
+processes, canceled trailing actions, replay accounting, failed/late/unverified
+trials, ties, runtime drift, and fresh round lineage. `pnpm test` includes them.
+See the skill for the user-confirmed round boundary and actual gameplay procedure.

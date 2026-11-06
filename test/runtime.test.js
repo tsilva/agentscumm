@@ -80,9 +80,45 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   });
   assert.equal(await runtime.page.locator('.game-route-controls').isVisible(), false);
   assert.equal(await runtime.page.locator('.game-route-bottom-actions').isVisible(), false);
-  assert.equal(await runtime.viewer.page.locator('header,button').count(), 0);
+  assert.equal(await runtime.viewer.page.locator('header').count(), 0);
+  assert.equal(await runtime.viewer.page.locator('button').count(), 1);
   await runtime.viewer.page.waitForFunction(count => document.getElementById('actions').textContent === String(count), runtime.status().actionSequences);
-  assert.match(await runtime.viewer.page.locator('footer').textContent(), /^Actions: \d+$/);
+  assert.match(await runtime.viewer.page.locator('footer').textContent(), /^Actions: \d+Sound off$/);
+  const sound = runtime.viewer.page.getByRole('button', { name: 'Game sound', exact: true });
+  assert.equal(await sound.getAttribute('aria-pressed'), 'false');
+  const soundBounds = await sound.boundingBox();
+  assert.ok(soundBounds.x > 500 && soundBounds.y >= 456, 'Sound toggle sits in the bottom-right footer');
+  const audioSample = () => runtime.shell.evaluate(async () => {
+    const context = new OfflineAudioContext(1, 128, 44100);
+    const source = context.createConstantSource(); source.offset.value = 0.25;
+    if (source.connect(context.destination) !== context.destination) throw Error('Audio connect chaining changed');
+    source.disconnect(context.destination);
+    source.connect(context.destination); source.start();
+    return (await context.startRendering()).getChannelData(0)[64];
+  });
+  assert.equal(await audioSample(), 0, 'Game audio starts muted');
+  const sequencesBeforeSound = runtime.status().actionSequences;
+  await sound.click();
+  await runtime.viewer.page.waitForFunction(() => document.getElementById('sound').textContent === 'Sound on');
+  assert.equal(runtime.status().soundEnabled, true);
+  assert.equal(await audioSample(), 0.25, 'Enabling sound passes game audio to the output');
+  // Existing graphs must also follow the setting, without suspending their clocks.
+  await runtime.shell.evaluate(() => {
+    globalThis.pendingAudio = new OfflineAudioContext(1, 128, 44100);
+    const source = pendingAudio.createConstantSource(); source.offset.value = 0.25;
+    source.connect(pendingAudio.destination); source.start();
+  });
+  await sound.click();
+  await runtime.viewer.page.waitForFunction(() => document.getElementById('sound').textContent === 'Sound off');
+  assert.equal(await audioSample(), 0, 'Disabling sound mutes newly connected graphs');
+  assert.equal(await runtime.shell.evaluate(async () =>
+    (await pendingAudio.startRendering()).getChannelData(0)[64]), 0, 'Disabling sound also mutes existing graphs');
+  assert.equal(runtime.status().actionSequences, sequencesBeforeSound, 'Sound is not a gameplay action');
+  assert.equal((await fetch(new URL('sound/on', viewerUrl), { method: 'POST' })).status, 403);
+  assert.equal((await fetch(new URL('sound/on', viewerUrl), { method: 'POST', headers: {
+    Origin: 'https://untrusted.example', 'X-AgentSCUMM-Spectator': '1',
+  } })).status, 403);
+  assert.equal(runtime.status().soundEnabled, false, 'Untrusted requests cannot enable audio');
   const corner = await runtime.viewer.page.locator('#screen').evaluate(canvas =>
     [...canvas.getContext('2d').getImageData(0, 0, 1, 1).data]);
   assert.ok(corner[1] > corner[0] && corner[1] > corner[2], 'Cropped game starts with green game pixels, not black padding or magenta controls');
@@ -143,7 +179,9 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   runtime.capture = capture;
 
   // A replaced document cannot receive actions based on an old observation.
+  await runtime.setSoundEnabled(true);
   await runtime.shell.goto(`${fixture.url}/scummvm.html`);
+  assert.equal(await audioSample(), 0.25, 'Replacement game documents inherit the current sound setting');
   await assert.rejects(runtime.act({ ...request, request_id: 'stale-document' }), /document changed/);
   assert.equal(runtime.status().phase, 'disconnected');
   assert.equal((await runtime.act(partial)).replayed, true);
@@ -152,6 +190,7 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   const next = await runtime.start({ restart: true });
   assert.notEqual(next.sessionId, started.sessionId);
   assert.equal(runtime.status().actionSequences, 0, 'A new game session resets the counter');
+  assert.equal(runtime.status().soundEnabled, false, 'A new game session defaults to sound off');
   assert.equal((await runtime.waitReady(15000)).phase, 'ready');
   await assert.rejects(runtime.act({ ...request, request_id: 'stale-session' }), /Session ID/);
   await runtime.closeGame();

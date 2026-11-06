@@ -4,7 +4,7 @@ import { chromium } from 'playwright';
 import { MacOSSpectator } from './macos-app.js';
 import { frameInfo } from './history.js';
 
-// A separate image-only page: no game iframe, input endpoint, or browser-control connection.
+// A separate screenshot page: only a local audio toggle, never a game-input endpoint.
 const html = `<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AgentSCUMM</title><style>
@@ -12,16 +12,33 @@ const html = `<!doctype html><html lang="en"><meta charset="utf-8">
 body{display:grid;grid-template-rows:minmax(0,1fr) 24px}
 #screen{display:block;width:100%;height:100%;object-fit:contain;image-rendering:pixelated;user-select:none;pointer-events:none}
 #screen[hidden]{display:none}
-footer{grid-row:2;padding:0 10px;background:#171717;color:#bbb;font:12px/24px system-ui,sans-serif;font-variant-numeric:tabular-nums}
-</style><canvas id="screen" aria-label="Live game screen" hidden></canvas><footer>Actions: <span id="actions">0</span></footer>
+footer{grid-row:2;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#171717;color:#bbb;font:12px/24px system-ui,sans-serif;font-variant-numeric:tabular-nums}
+#sound{height:22px;padding:0 5px;border:0;border-radius:3px;background:transparent;color:inherit;font:inherit;line-height:22px;cursor:pointer}
+#sound:hover{background:#333;color:#fff}#sound:focus-visible{outline:1px solid #bbb;outline-offset:-1px}#sound[aria-pressed="true"]{color:#fff}#sound:disabled{cursor:wait;opacity:.6}
+</style><canvas id="screen" aria-label="Live game screen" hidden></canvas><footer><span>Actions: <span id="actions">0</span></span><button id="sound" type="button" aria-label="Game sound" aria-pressed="false" title="Turn sound on">Sound off</button></footer>
 <script>
 let lastId, gameTitle='AgentSCUMM';
 const screen=document.getElementById('screen'),context=screen.getContext('2d');
+const sound=document.getElementById('sound');
+function showSound(enabled){
+ sound.textContent=enabled?'Sound on':'Sound off';sound.setAttribute('aria-pressed',String(enabled));
+ sound.title=enabled?'Turn sound off':'Turn sound on';
+}
+sound.addEventListener('click',async()=>{
+ const enabled=sound.getAttribute('aria-pressed')!=='true';sound.disabled=true;
+ try{
+  const response=await fetch('sound/'+(enabled?'on':'off'),{method:'POST',headers:{'X-AgentSCUMM-Spectator':'1'}});
+  if(!response.ok)throw Error('Audio unavailable');
+  showSound((await response.json()).soundEnabled);
+ }catch{sound.title='Unable to change sound. Click to retry.';}
+ finally{sound.disabled=false;}
+});
 async function refresh(){
  try{
   const response=await fetch('status',{cache:'no-store'});if(!response.ok)throw Error('Session unavailable');
   const state=await response.json();
   document.getElementById('actions').textContent=String(state.actionSequences??0);
+  if(!sound.disabled)showSound(state.soundEnabled===true);
   const name=state.game?state.game.split('-').map((word,index)=>index>0&&['a','an','and','of','the','in'].includes(word)?word:word.charAt(0).toUpperCase()+word.slice(1)).join(' '):null;
   gameTitle=(name?'AgentSCUMM - '+name:'AgentSCUMM')+' ['+state.instanceLabel+']';document.title=gameTitle;
   const info=state.frame,bounds=info?.displayBounds||info?.canvasBounds;
@@ -75,10 +92,20 @@ export class SpectatorViewer {
       response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
       response.setHeader('Content-Security-Policy', "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'");
       if (request.headers.host !== expectedHost) { response.writeHead(403).end(); return; }
-      if (request.method !== 'GET') { response.writeHead(405).end(); return; }
       const prefix = `/${this.token}/`;
       if (!path.startsWith(prefix)) { response.writeHead(404).end(); return; }
       const route = path.slice(prefix.length);
+      if (request.method === 'POST' && ['sound/on', 'sound/off'].includes(route)) {
+        if (request.headers.origin !== `http://${expectedHost}` || request.headers['x-agentscumm-spectator'] !== '1') {
+          response.writeHead(403).end(); return;
+        }
+        this.runtime.setSoundEnabled(route === 'sound/on').then(soundEnabled => {
+          response.setHeader('Content-Type', 'application/json');
+          response.end(JSON.stringify({ soundEnabled }));
+        }).catch(() => response.writeHead(503).end());
+        return;
+      }
+      if (request.method !== 'GET') { response.writeHead(405).end(); return; }
       if (route === '') { response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(html); }
       else if (route === 'status') {
         const frame = this.runtime.history.latest();

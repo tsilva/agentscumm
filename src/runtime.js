@@ -14,6 +14,7 @@ import { installDisplayObserver, displayBounds, captureBounds } from './display.
 import { claimDataDir } from './instances.js';
 import { readLibrary, validateZipPaths, importZipFiles, saveLibrary, launchReattachedGame } from './library.js';
 import { enableEvaluation, readEvaluation } from './evaluation.js';
+import { installAudioControl } from './audio.js';
 
 export const games = [
   ['beneath-a-steel-sky', 'sky', true],
@@ -71,6 +72,7 @@ export class GameRuntime {
     this.phase = 'idle';
     this.actions = [];
     this.actionSequences = 0;
+    this.soundEnabled = false;
     this.requests = new Map();
     this.usedRequestIds = new Set();
     this.captureFailures = 0;
@@ -94,6 +96,7 @@ export class GameRuntime {
       loadingText: this.loadingText, lastNetworkError: this.lastNetworkError,
       runtimeHealth: this.runtimeHealth,
       actionSequences: this.actionSequences,
+      soundEnabled: this.soundEnabled,
       pendingRequests: [...this.pendingRequests.values()].slice(-5),
       connected: Boolean(this.context?.browser()?.isConnected() && this.page && !this.page.isClosed()),
       captureFpsRequested: this.fps, captureFailures: this.captureFailures,
@@ -166,6 +169,7 @@ export class GameRuntime {
       this.history.clear();
       this.actions = [];
       this.actionSequences = 0;
+      this.soundEnabled = false;
       this.requests.clear();
       this.usedRequestIds.clear();
       this.captureFailures = 0;
@@ -201,6 +205,7 @@ export class GameRuntime {
       try {
         this.context = await chromium.launchPersistentContext(path.join(this.dataDir, 'chromium-profile'), {
           headless: true, viewport: this.dimensions, screen: this.dimensions, deviceScaleFactor: 1,
+          ignoreDefaultArgs: ['--mute-audio'], args: ['--autoplay-policy=no-user-gesture-required'],
           acceptDownloads: false, timeout: remaining(),
         });
       } catch (error) {
@@ -242,6 +247,8 @@ export class GameRuntime {
     }
     this.page = await this.context.newPage();
     const page = this.page;
+    await page.exposeBinding('__agentscummGetSoundEnabled', () => this.soundEnabled);
+    await page.addInitScript(installAudioControl);
     await page.addInitScript(installHealthObserver);
     await page.addInitScript(installDisplayObserver);
     if (this.evaluation) await page.addInitScript(enableEvaluation);
@@ -552,7 +559,11 @@ export class GameRuntime {
     if (action.type === 'drag') {
       await move(action.from_x, action.from_y);
       await page.mouse.down({ button: action.button });
-      try { await move(action.x, action.y, action.steps); } finally { await page.mouse.up({ button: action.button }); }
+      try {
+        await sleep(action.hold_ms, undefined, { signal });
+        await move(action.x, action.y, action.steps);
+        await sleep(action.hold_ms, undefined, { signal });
+      } finally { await page.mouse.up({ button: action.button }); }
     }
   }
 
@@ -591,6 +602,28 @@ export class GameRuntime {
       if (!this.closing && !this.evaluation.result) this.evaluationTimer = setTimeout(tick, this.evaluation.intervalMs);
     };
     this.evaluationTimer = setTimeout(tick, 0);
+  }
+
+  async setSoundEnabled(enabled) {
+    if (typeof enabled !== 'boolean') throw new Error('Sound setting must be a boolean');
+    const apply = async () => {
+      const previous = this.soundEnabled;
+      this.soundEnabled = enabled;
+      try {
+        await Promise.all((this.page?.frames() ?? []).map(frame => bounded(frame.evaluate(value => {
+          globalThis.__agentscummSetSoundEnabled?.(value);
+        }, enabled), 2000, 'Game audio did not respond')));
+      } catch (error) {
+        this.soundEnabled = previous;
+        await Promise.allSettled((this.page?.frames() ?? []).map(frame => bounded(frame.evaluate(value => {
+          globalThis.__agentscummSetSoundEnabled?.(value);
+        }, previous), 2000, 'Game audio rollback did not respond')));
+        throw error;
+      }
+      return this.soundEnabled;
+    };
+    this.soundTask = (this.soundTask ?? Promise.resolve()).catch(() => {}).then(apply);
+    return this.soundTask;
   }
 
   async stopPage() {
