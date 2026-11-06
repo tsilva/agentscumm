@@ -17,11 +17,14 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
     args: ['src/index.js', '--no-viewer', '--base-url', fixture.url, '--data-dir', dataDir] }));
   const tools = (await client.listTools()).tools;
   const names = tools.map(tool => tool.name);
-  assert.deepEqual(names.sort(), ['act', 'list_games', 'observe', 'session', 'status']);
+  assert.deepEqual(names.sort(), ['act', 'library', 'list_games', 'observe', 'session', 'status']);
   for (const tool of tools) assert.equal(tool.annotations.readOnlyHint, ['list_games', 'observe', 'status'].includes(tool.name));
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
   assert.equal(JSON.parse((await call('status')).content[0].text).phase, 'idle');
   assert.ok(JSON.parse((await call('list_games')).content[0].text).games.length > 0);
+  assert.equal(JSON.parse((await call('library')).content[0].text).state, 'idle');
+  assert.equal((await call('library', { operation: 'import' })).isError, true);
+  assert.equal((await call('library', { paths: ['/missing.zip'] })).isError, true);
   assert.equal((await call('session', { operation: 'close', restart: true })).isError, true);
   assert.equal(JSON.parse((await call('status')).content[0].text).phase, 'idle');
   const launch = JSON.parse((await call('session', { operation: 'start' })).content[0].text);

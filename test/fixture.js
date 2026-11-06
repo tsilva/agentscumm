@@ -1,9 +1,36 @@
 import http from 'node:http';
 
-export async function startFixture({ navigationDelay = 0, startupDelay = 600, documentDelay = 0 } = {}) {
+export async function startFixture({ navigationDelay = 0, startupDelay = 600, documentDelay = 0, library = false } = {}) {
   const server = http.createServer((request, response) => {
     response.setHeader('Content-Type', 'text/html');
-    if (request.url.startsWith('/scummvm.html')) {
+    if (library && request.url === '/') {
+      response.end(`<!doctype html><html><body>
+        <input type="file" accept=".zip,application/zip" aria-label="Choose save backup ZIP">
+        <button class="library-add-card">Add a game</button>
+        <input type="file" accept=".zip,application/zip" multiple>
+        <section id="library"></section><section id="hero"></section>
+        <dialog><p id="game-import-summary"></p><ul class="game-import-items"></ul><button onclick="this.parentElement.close()">Confirm</button></dialog>
+        <script>
+        document.querySelector('input[multiple]').onchange = event => {
+          const files=[...event.target.files], rows=[], seen=new Set();
+          let added=0,skipped=0,errors=0;
+          for(const file of files){
+            if(file.name==='invalid.zip'){errors++;rows.push('<li><strong>invalid.zip</strong><p>Error. Invalid ZIP</p></li>');continue;}
+            const title=file.name.replace(/\\.zip$/,'');
+            const href='/'+title.toLowerCase().replace(/[^a-z0-9]+/g,'-');
+            if([...document.querySelectorAll('#library a')].some(a=>a.getAttribute('href')===href)){skipped++;continue;}
+            const div=document.createElement('div');div.className='poster-entry';div.dataset.librarySourceIds=JSON.stringify([title]);
+            const a=document.createElement('a');a.href=href;a.innerHTML='<span class="poster-title">'+title+'</span>';
+            a.onclick=event=>{event.preventDefault();document.getElementById('hero').innerHTML='<button aria-label="Play '+title+'">Play</button>';
+              document.querySelector('#hero button').onclick=()=>{history.pushState(null,'','/local/play');document.body.innerHTML='<iframe style="position:fixed;inset:0;width:100vw;height:100vh;border:0" src="/scummvm.html"></iframe>';};};
+            div.append(a);document.getElementById('library').append(div);added++;
+            rows.push('<li><strong>'+file.name+'</strong><p>Added to your library</p></li>');
+          }
+          document.getElementById('game-import-summary').textContent=added+' games added · '+skipped+' games skipped · '+errors+' errors';
+          document.querySelector('.game-import-items').innerHTML=rows.join('');document.querySelector('dialog').showModal();event.target.value='';
+        };
+        </script></body></html>`);
+    } else if (request.url.startsWith('/scummvm.html')) {
       const mode = new URL(request.url, 'http://fixture').searchParams.get('mode');
       const html = `<!doctype html><html><style>body{margin:0;background:black}canvas{display:block;width:100vw;height:100vh}</style>
         <div id="scummvm-cursor-grab-hint" style="position:fixed;inset:0;background:magenta;z-index:100">Click the game to grab the cursor.</div><div id="status">Loading fixture</div><canvas id="canvas" width="320" height="240" tabindex="0"></canvas><script>

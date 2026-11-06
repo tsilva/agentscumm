@@ -40,7 +40,8 @@ An ownership guard rejects a second game launch against a live instance's data d
 
 | Tool | Behavior |
 | --- | --- |
-| `list_games` | Lists known catalog slugs and intro-checkpoint support. Future catalog slugs can also be launched. |
+| `list_games` | Lists known catalog slugs, intro-checkpoint support, and this instance’s imported games. Future catalog slugs can also be launched. |
+| `library` | `operation="import"` accepts 1–256 absolute local ZIP `paths` and starts an asynchronous import job. Poll `operation="status"` for the site’s results. Close an active game before importing. |
 | `session` | Required `operation`: `start`, `close`, or `open_viewer`. Start accepts `game` (default Flight of the Amazon Queen), `mode` (`skip_intro`, `beginning`, `continue`; default `skip_intro`), and `restart` (default false). It returns a session ID immediately; starting the active game reuses it unless restart is explicit. Close clears history but preserves saves/cache. The spectator is read-only. |
 | `status` | Checks renderer/runtime health and reports startup phase, connection, capture health, history coverage, spectator and recent actions. Optional `wait_ms` (0–25000, default 0) waits while loading; repeat until ready or an error. |
 | `observe` | Optional `source`: `fresh` (default), `frames`, or `history`. Fresh captures now, including loading/error screens. Frames requires `frame_ids` (1–8) and returns exact retained images in requested order. History accepts `seconds` (0.1–300, default 15), `count` (1–8, default 4), and optional `action_id`. Images report their source and original frame metadata; expired images are never replaced by fresh captures. |
@@ -48,9 +49,29 @@ An ownership guard rejects a second game launch against a live instance's data d
 
 Start with `session(operation="start", game="...")`, poll `status(wait_ms=10000)` while loading, then `observe()` and `act(...)`. Readiness means rendered startup content, which may still be a menu or intro. `status`, `observe`, and `list_games` are read-only tools, separate from session changes and input.
 
-This five-tool interface replaces the former names: `launch_game` → `session(operation="start")`, `close_game` → `session(operation="close")`, `open_viewer` → `session(operation="open_viewer")`, `session_status` → `status()`, `wait_for_ready(timeout_ms=N)` → `status(wait_ms=N)`, `get_frame(frame_id=ID)` → `observe(source="frames", frame_ids=[ID])`, and `review(...)` → `observe(source="history", ...)`. The old tool names are not registered. Reconnect clients to a newly started server to discover the current schemas; changing source files does not update an already running server.
+The session and observation tools replace the former names: `launch_game` → `session(operation="start")`, `close_game` → `session(operation="close")`, `open_viewer` → `session(operation="open_viewer")`, `session_status` → `status()`, `wait_for_ready(timeout_ms=N)` → `status(wait_ms=N)`, `get_frame(frame_id=ID)` → `observe(source="frames", frame_ids=[ID])`, and `review(...)` → `observe(source="history", ...)`. The old tool names are not registered. Reconnect clients to a newly started server to discover the current schemas; changing source files does not update an already running server.
 
 Flight of the Amazon Queen is the default game. The MCP provides the interface; Codex handles gameplay through the Play Game skill below.
+
+## Import local games
+
+Close the active game, then call `library(operation="import", paths=["/absolute/path/Game.zip", ...])`.
+Poll `library(operation="status")` until its state is `completed` or `failed`. Completion means the
+site finished scanning; inspect `summary` and `items` for individual errors and skipped bundled
+copies. The server uses ScummWEB’s normal game ZIP input and its existing scanner and duplicate
+handling. It does not extract game files itself or upload ZIPs to a server.
+
+Imported entries appear in `list_games` with `source: "local_import"`. Launch their returned `slug`
+with `session(operation="start", game="...")`; the server selects the library card and its Play
+or Continue action instead of requesting a nonexistent bundled play route. Imported games do not
+have intro checkpoints, so `skip_intro` launches their beginning.
+
+The original ZIPs remain where they are. Keep the source disk mounted and preserve the paths.
+The browser file-input fallback provides tab-local File objects rather than persistent file
+handles. The instance records paths and catalog entries in `local-library.json` under its own
+data directory, and reattaches those ZIPs through the importer when it needs a new library tab.
+It does not copy the whole collection into the instance or inherit another instance’s imports.
+Library registration does not verify that each game can reach its ending.
 
 ## Play Game skill
 

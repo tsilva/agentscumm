@@ -3,7 +3,7 @@ import { parseArgs } from 'node:util';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { GameRuntime, games } from './runtime.js';
+import { GameRuntime } from './runtime.js';
 import { actionSchema } from './actions.js';
 import { imageContent } from './history.js';
 
@@ -37,7 +37,15 @@ function tool(name, description, inputSchema, callback, readOnly = false) {
 }
 
 tool('list_games', 'List known ScummWEB game slugs. Launch also accepts future catalog slugs.', {},
-  async () => ({ content: [text({ baseUrl: runtime.baseUrl.origin, games })] }), true);
+  async () => ({ content: [text({ baseUrl: runtime.baseUrl.origin, games: await runtime.listGames() })] }), true);
+
+tool('library', 'Import local game ZIPs through ScummWEB’s normal file importer in this instance. Starts an asynchronous job; poll operation=status for the site’s results. Close any active game first. ZIPs remain at their original paths and must stay available for relaunch. Imported entries appear in list_games.', {
+  operation: z.enum(['import', 'status']).default('status'),
+  paths: z.array(z.string().min(1)).min(1).max(256).optional(),
+}, async ({ operation, paths }) => {
+  if (operation === 'status' && paths !== undefined) throw new Error('paths requires operation="import"');
+  return { content: [text(await runtime.library({ operation, paths }))] };
+});
 
 tool('session', 'Manage the owned game session: start returns immediately; close preserves saves and clears history; open_viewer opens the read-only spectator. Only start accepts game/mode/restart. Starting the active game reuses it unless restart=true. Poll status for readiness.', {
   operation: z.enum(['start', 'close', 'open_viewer']),

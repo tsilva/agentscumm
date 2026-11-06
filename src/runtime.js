@@ -12,6 +12,7 @@ import { SpectatorViewer } from './viewer.js';
 import { installHealthObserver, readShellState, bounded } from './health.js';
 import { installDisplayObserver, displayBounds, captureBounds } from './display.js';
 import { claimDataDir } from './instances.js';
+import { readLibrary, validateZipPaths, importZipFiles, saveLibrary } from './library.js';
 
 export const games = [
   ['beneath-a-steel-sky', 'sky', true],
@@ -96,6 +97,8 @@ export class GameRuntime {
       captureFpsRequested: this.fps, captureFailures: this.captureFailures,
       lastCaptureError: this.lastCaptureError, history: this.history.status(),
       viewerUrl: this.viewer.url, viewerOpen: this.viewer.isOpen, viewerError: this.viewerError,
+      libraryImport: this.libraryImport && { state: this.libraryImport.state, job_id: this.libraryImport.job_id,
+        file_count: this.libraryImport.file_count, summary: this.libraryImport.summary, error: this.libraryImport.error },
       recentActions: this.actions.slice(-8), capabilities: ['click', 'move', 'key', 'drag', 'wait', 'screenshot', 'sequences', 'frame-history', 'spectator'] };
   }
 
@@ -104,13 +107,53 @@ export class GameRuntime {
       sessionId: this.sessionId, ...payload }) + '\n', { mode: 0o600 });
   }
 
+  async listGames() {
+    const local = (await readLibrary(this.dataDir)).games;
+    return [...games.filter(game => !local.some(item => item.slug === game.slug)), ...local];
+  }
+
+  async library({ operation = 'status', paths } = {}) {
+    if (operation === 'status') return this.libraryImport ?? { state: 'idle' };
+    return this.queue.run(async () => {
+      if (this.closing) throw new Error('Runtime is shutting down');
+      if (['loading', 'ready'].includes(this.phase)) throw new Error('Close the active game before importing ZIPs');
+      if (this.libraryImport?.state === 'importing') throw new Error('A library import is already running');
+      const files = await validateZipPaths(paths);
+      const previous = await readLibrary(this.dataDir);
+      const job = { state: 'importing', job_id: randomUUID(), file_count: files.length,
+        started_at: new Date().toISOString() };
+      this.libraryImport = job;
+      this.libraryTask = (async () => {
+        await this.ensureContext(() => 30000);
+        if (this.closing) throw new Error('Runtime is shutting down');
+        if (!this.libraryPage || this.libraryPage.isClosed()) {
+          this.libraryPage = await this.context.newPage();
+          const response = await this.libraryPage.goto(new URL('/', this.baseUrl).href,
+            { waitUntil: 'domcontentloaded', timeout: 30000 });
+          if (response && !response.ok()) throw new Error(`Library route returned HTTP ${response.status()}`);
+          // File objects are tab-local. Reattach earlier files after a restart.
+          if (previous.paths.length) await importZipFiles(this.libraryPage, await validateZipPaths(previous.paths));
+        }
+        const result = await importZipFiles(this.libraryPage, files);
+        await saveLibrary(this.dataDir, previous, files, result);
+        Object.assign(job, { state: 'completed', finished_at: new Date().toISOString(), ...result });
+      })().catch(error => {
+        Object.assign(job, { state: 'failed', error: error.message, finished_at: new Date().toISOString() });
+      });
+      return job;
+    });
+  }
+
   async start({ game = 'flight-of-the-amazon-queen', mode = 'skip_intro', restart = false } = {}) {
     return this.queue.run(async () => {
       if (this.closing) throw new Error('Runtime is shutting down');
+      if (this.libraryImport?.state === 'importing') throw new Error('Wait for the library import to finish');
       if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(game)) throw new Error('Game must be a ScummWEB catalog slug');
       if (this.game === game && ['loading', 'ready'].includes(this.phase) && !restart) return this.status();
       if (this.phase === 'loading') throw new Error('A game is loading; wait for it or close the session first');
       if (this.page) await this.stopPage();
+      this.importedGame = (await readLibrary(this.dataDir)).games.find(item => item.slug === game);
+      this.launchMode = mode;
       this.sessionId = randomUUID();
       this.game = game;
       this.phase = 'loading';
@@ -133,7 +176,7 @@ export class GameRuntime {
       if (mode === 'skip_intro' && catalogGame?.skipIntro) url.hash = 'seed=0';
       if (mode === 'continue') url.hash = 'continue';
       this.gameUrl = url.toString();
-      this.expectedTarget = catalogGame?.target;
+      this.expectedTarget = this.importedGame ? undefined : catalogGame?.target;
       await this.log('launch', { game, mode, url: this.gameUrl, dimensions: this.dimensions,
         instanceId: this.instanceId, dataDir: this.dataDir,
         sourceRevision: this.sourceRevision });
@@ -148,20 +191,7 @@ export class GameRuntime {
     });
   }
 
-  async boot(sessionId) {
-    // One monotonic budget covers browser startup, navigation and the runtime.
-    // Wall-clock jumps (including host sleep) must not expire a fresh launch.
-    const deadline = performance.now() + this.launchTimeoutMs;
-    const remaining = () => {
-      const value = deadline - performance.now();
-      if (value <= 0) throw new Error(`Game startup timed out at ${this.bootPhase}`);
-      return Math.ceil(value);
-    };
-    const startupProbe = operation => {
-      const budget = remaining();
-      return bounded(operation, Math.min(3000, budget), budget <= 3000
-        ? `Game startup timed out at ${this.bootPhase}` : 'Game renderer did not respond during startup');
-    };
+  async ensureContext(remaining) {
     if (!this.context) {
       this.releaseDataDir ||= await claimDataDir(this.dataDir);
       try {
@@ -185,9 +215,29 @@ export class GameRuntime {
         }
       });
     }
+  }
+
+  async boot(sessionId) {
+    // One monotonic budget covers browser startup, navigation and the runtime.
+    // Wall-clock jumps (including host sleep) must not expire a fresh launch.
+    const deadline = performance.now() + this.launchTimeoutMs;
+    const remaining = () => {
+      const value = deadline - performance.now();
+      if (value <= 0) throw new Error(`Game startup timed out at ${this.bootPhase}`);
+      return Math.ceil(value);
+    };
+    const startupProbe = operation => {
+      const budget = remaining();
+      return bounded(operation, Math.min(3000, budget), budget <= 3000
+        ? `Game startup timed out at ${this.bootPhase}` : 'Game renderer did not respond during startup');
+    };
+    await this.ensureContext(remaining);
     if (this.sessionId !== sessionId || this.closing) return;
-    for (const page of this.context.pages()) await page.close();
-    this.page = await this.context.newPage();
+    for (const page of this.context.pages()) {
+      if (page !== this.libraryPage) await page.close();
+    }
+    this.page = this.importedGame && this.libraryPage && !this.libraryPage.isClosed()
+      ? this.libraryPage : await this.context.newPage();
     const page = this.page;
     await page.addInitScript(installHealthObserver);
     await page.addInitScript(installDisplayObserver);
@@ -209,8 +259,33 @@ export class GameRuntime {
     if (this.viewerMode) {
       try { await this.viewer.open(); } catch (error) { this.viewerError = error.message; }
     }
-    const response = await page.goto(this.gameUrl, { waitUntil: 'domcontentloaded', timeout: remaining() });
-    if (response && !response.ok()) throw new Error(`Game route returned HTTP ${response.status()}`);
+    if (this.importedGame) {
+      if (page !== this.libraryPage) {
+        this.libraryPage = page;
+        const response = await page.goto(new URL('/', this.baseUrl).href,
+          { waitUntil: 'domcontentloaded', timeout: remaining() });
+        if (response && !response.ok()) throw new Error(`Library route returned HTTP ${response.status()}`);
+        const saved = await readLibrary(this.dataDir);
+        await importZipFiles(page, await validateZipPaths(saved.paths), remaining());
+      }
+      const href = this.importedGame.href;
+      // href is taken from the rendered library, not synthesized from a filename.
+      const links = page.locator('#library a');
+      let selected = false;
+      for (let index = 0; index < await links.count(); index++) {
+        if (await links.nth(index).getAttribute('href') === href) {
+          await links.nth(index).click(); selected = true; break;
+        }
+      }
+      if (!selected) throw new Error('Imported game is no longer present in the library; import its ZIP again');
+      await page.getByRole('button', { name: `${this.launchMode === 'continue' ? 'Continue' : 'Play'} ${this.importedGame.title}`, exact: true })
+        .click({ timeout: remaining() });
+      await page.waitForURL(url => url.pathname === '/local/play', { timeout: remaining() });
+      this.gameUrl = page.url();
+    } else {
+      const response = await page.goto(this.gameUrl, { waitUntil: 'domcontentloaded', timeout: remaining() });
+      if (response && !response.ok()) throw new Error(`Game route returned HTTP ${response.status()}`);
+    }
     // ScummWEB's web-player controls are not part of the game or MCP input surface.
     await page.addStyleTag({ content: '.game-route-controls,.game-route-bottom-actions,.game-route-touch-cursor-pad-shell{display:none!important}' });
     let renderedSamples = 0, startupToken;
@@ -501,6 +576,7 @@ export class GameRuntime {
     clearTimeout(this.captureTimer);
     const page = this.page;
     this.page = null; this.canvas = null; this.shell = null;
+    if (page === this.libraryPage) this.libraryPage = null;
     await page?.close();
     await this.captureTask?.catch(() => {});
   }
@@ -524,8 +600,11 @@ export class GameRuntime {
     this.shutdownSignal.abort(new Error('Game runtime is shutting down'));
     clearTimeout(this.captureTimer);
     await this.stopPage();
+    await this.libraryPage?.close();
+    this.libraryPage = null;
     await this.bootTask;
     await this.queue.tail;
+    await this.libraryTask;
     await this.context?.close();
     this.context = null;
     await this.viewer.close();

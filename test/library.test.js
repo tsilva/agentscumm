@@ -1,0 +1,68 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { GameRuntime } from '../src/runtime.js';
+import { validateZipPaths } from '../src/library.js';
+import { startFixture } from './fixture.js';
+
+test('local ZIP import, site errors, instance persistence and imported game launch', { timeout: 60000 }, async t => {
+  const folder = await mkdtemp(path.join(tmpdir(), 'agentscumm-library-'));
+  const fixture = await startFixture({ library: true });
+  const options = { baseUrl: fixture.url, dataDir: path.join(folder, 'instance'), viewer: false };
+  let runtime = new GameRuntime(options);
+  t.after(async () => { await runtime.close(); await fixture.close(); await rm(folder, { recursive: true, force: true }); });
+  const zip = path.join(folder, 'Imported Adventure.zip');
+  const bad = path.join(folder, 'invalid.zip');
+  await writeFile(zip, 'fixture file'); await writeFile(bad, 'fixture invalid');
+  await assert.rejects(validateZipPaths([]), /1–256/);
+  await assert.rejects(validateZipPaths([folder]), /Not a game ZIP/);
+  await assert.rejects(validateZipPaths([path.join(folder, 'missing.zip')]), /ENOENT/);
+  await assert.rejects(validateZipPaths([path.join(folder, '._metadata.zip')]), /Not a game ZIP/);
+  assert.deepEqual(await validateZipPaths([zip, zip]), [zip]);
+
+  assert.equal((await runtime.library({ operation: 'import', paths: [zip, bad] })).state, 'importing');
+  await assert.rejects(runtime.start(), /import to finish/);
+  await assert.rejects(runtime.library({ operation: 'import', paths: [zip] }), /already running/);
+  await runtime.libraryTask;
+  let result = await runtime.library();
+  assert.equal(result.state, 'completed', result.error);
+  assert.match(result.summary, /1 games added.*1 errors/);
+  assert.equal(result.items.find(item => item.name === 'invalid.zip').message, 'Error. Invalid ZIP');
+  const entry = (await runtime.listGames()).find(game => game.slug === 'imported-adventure');
+  assert.equal(entry.title, 'Imported Adventure');
+  assert.equal(entry.source, 'local_import');
+  const saved = JSON.parse(await readFile(path.join(options.dataDir, 'local-library.json')));
+  assert.deepEqual(saved.paths, [zip, bad]);
+  assert.equal((await readFile(zip, 'utf8')), 'fixture file', 'Source stays unchanged');
+  await runtime.library({ operation: 'import', paths: [zip] }); await runtime.libraryTask;
+  assert.match((await runtime.library()).summary, /0 games added.*1 games skipped/);
+  await runtime.close();
+
+  runtime = new GameRuntime(options);
+  assert.ok((await runtime.listGames()).some(game => game.slug === entry.slug));
+  const started = await runtime.start({ game: entry.slug });
+  const ready = await runtime.waitReady(20000);
+  assert.equal(ready.phase, 'ready', ready.message);
+  assert.equal(ready.sessionId, started.sessionId);
+  assert.match(ready.url, /\/local\/play$/);
+  await assert.rejects(runtime.library({ operation: 'import', paths: [zip] }), /Close the active game/);
+  await runtime.closeGame();
+  await runtime.start({ game: entry.slug });
+  assert.equal((await runtime.waitReady(20000)).phase, 'ready');
+});
+
+
+test('shutdown cancels an import during browser startup', { timeout: 15000 }, async t => {
+  const folder = await mkdtemp(path.join(tmpdir(), 'agentscumm-import-close-'));
+  const fixture = await startFixture({ library: true });
+  const runtime = new GameRuntime({ baseUrl: fixture.url, dataDir: path.join(folder, 'instance'), viewer: false });
+  t.after(async () => { await runtime.close(); await fixture.close(); await rm(folder, { recursive: true, force: true }); });
+  const zip = path.join(folder, 'Adventure.zip');
+  await writeFile(zip, 'fixture');
+  await runtime.library({ operation: 'import', paths: [zip] });
+  await runtime.close();
+  assert.equal((await runtime.library()).state, 'failed');
+  assert.equal(runtime.context, null);
+});
