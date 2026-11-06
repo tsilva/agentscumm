@@ -48,7 +48,9 @@ mkdir -p "$HOME/.codex/skills"
 ln -s "$PWD/.agents/skills/agentscumm_play-game" "$HOME/.codex/skills/agentscumm_play-game"
 ```
 
-The gameplay skill interacts with games only through the attached AgentSCUMM MCP tools. Backend selection and implementation belong to the server. If the tools are unavailable, the skill reports the connection blocker. Local run records and web research, including walkthroughs, remain available to support gameplay. Resume can restore only progress saved by the game.
+Before play, the skill requires a clean checkout, synchronizes its current branch with the configured upstream, and compares that full commit with `session_status.sourceRevision.commit_id`. The MCP must report the matching AgentSCUMM revision and a clean startup. A stale or dirty server must be stopped and restarted from the synchronized checkout using the host's supported MCP lifecycle controls, preserving its configuration and saves, then checked again. Missing provenance or unavailable restart controls block play; `launch_game(restart: true)` restarts only the game. Restarting the MCP ends its active game session, so save progress first. Without a remote or on detached HEAD, the intended latest revision must be established before playing.
+
+The gameplay skill interacts with games only through the attached AgentSCUMM MCP tools. Backend selection and implementation belong to the server; the revision check and supported host restart are the preflight exception. If the tools are unavailable, the skill reports the connection blocker. Local run records and web research, including walkthroughs, remain available to support gameplay. Resume can restore only progress saved by the game.
 
 Play Game captures startup context and automatically queues verified run export and a local benchmark entry after observing the ending. The finalizer waits for that gameplay turn to finish so its final reply and usage are included. Its `finalization.json` receipt distinguishes queued work, success and archival failures; see [automatic finalization](run-context.md#automatic-finalization).
 

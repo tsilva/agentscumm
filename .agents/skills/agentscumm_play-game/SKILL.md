@@ -7,7 +7,7 @@ description: Play a named ScummWEB adventure through AgentSCUMM's MCP and work t
 
 Use the AgentSCUMM MCP to launch the game the user names and keep playing toward its ending. Codex owns discovery, planning, recovery, and memory. The MCP supplies game controls and observations; do not add puzzle logic to it or build a separate solver for this request.
 
-Treat the attached AgentSCUMM MCP tools as the complete gameplay interface. Use only those tools to launch, observe, control, review, and recover a game. The server owns its implementation; do not inspect or manage its internals, substitute another control interface, or ask the user to choose its backend. Local file access is for run records and saved evidence. Web research, including walkthroughs, is allowed for gameplay guidance.
+Treat the attached AgentSCUMM MCP tools as the complete gameplay interface. Use only those tools to launch, observe, control, review, and recover a game. The server owns its implementation; do not inspect or manage its internals, substitute another control interface, or ask the user to choose its backend. The preflight below permits checking the checkout revision and restarting the configured MCP through its host's supported lifecycle controls. Local file access otherwise serves run records and saved evidence. Web research, including walkthroughs, is allowed for gameplay guidance.
 
 ## Start or resume
 
@@ -17,7 +17,7 @@ Resolve the AgentSCUMM repository from this skill's real path for run storage. R
 
 Before starting or resuming play, run `git status --porcelain=v1 --untracked-files=all` in the owning AgentSCUMM checkout. Any staged, unstaged, or untracked change blocks play. Show the affected paths, ask the user to commit all changes, and wait. Do not create the run directory, launch or resume a game, or send gameplay inputs while this gate is blocked. Do not commit on the user's behalf, stash, discard, or hide changes to satisfy the gate. Ignored run data remains ignored and must not be committed.
 
-After the user has committed, rerun the status check; their confirmation alone is not proof of a clean checkout. Require an existing commit and capture its full hash with `git rev-parse --verify HEAD`, plus the branch name or `null` for detached HEAD. If the checkout is already clean and has a commit, proceed without asking for another commit or approval.
+After the user has committed, rerun the status check; their confirmation alone is not proof of a clean checkout. If the checkout is already clean and has a commit, proceed without asking for another commit or approval. Synchronize the current branch with its configured upstream using `git pull --no-rebase`, preserving local commits and the current branch. Reuse a successful synchronization already performed for this task. Do not assume `origin/main`; follow the user's Git transport policy. If synchronization fails, the upstream is ambiguous, or conflicts remain, stop. With no remote or detached HEAD, report that upstream freshness is unverified and stop until the intended latest revision is established. Recheck cleanliness, then capture the full hash with `git rev-parse --verify HEAD` and the branch name. This synchronized clean revision is the required MCP revision for this playthrough.
 
 ### Initialize the run immediately
 
@@ -31,7 +31,15 @@ Create a free-form `memory.md` alongside the manifest immediately. Organize and 
 
 Read [references/run-archiving.md](references/run-archiving.md) and capture the exposed startup tool inventory and any additional injected prompt assets before gameplay. Keep `initial-context.json` and immutable supplied assets in the run directory. Preserve this capture on resume; missing historical startup context stays unknown. Check existing finalization state before queueing another job.
 
-Reuse a healthy live session for the requested game when available. Otherwise call `launch_game` for the selected slug, poll `wait_for_ready` while loading, and `observe` the resulting screen. Open the spectator with `open_viewer` if needed. For a saved run, use the supported `continue` launch mode when appropriate. Do not restart or discard a live game merely to create a new notes directory.
+### Verify the running MCP revision
+
+Before launching or resuming gameplay, call the attached `session_status` and compare its `sourceRevision.commit_id` with the required full checkout hash. Require `sourceRevision.repository: "agentscumm"` and `sourceRevision.dirty: false`. A matching package version, process start time, or current checkout alone does not establish which code the running server loaded. Missing or unverifiable provenance blocks play.
+
+If the server revision is stale or was started dirty, stop that configured MCP server and start it from the synchronized clean checkout through the MCP host's supported lifecycle controls before any further gameplay. Preserve its registration, launch options, data directory and game saves; ensure the old instance has stopped before starting its replacement. Use the game's save UI through the attached tools first if an active session has progress to preserve, and record the restart in memory. This required update takes precedence over reusing a live session. Do not launch a separate client, kill unrelated processes, or delete browser data. `close_game` and `launch_game(restart: true)` do not restart the MCP server.
+
+After restart, reacquire the attached tools and call `session_status` again; proceed only after its startup provenance matches the required clean revision. If supported lifecycle controls are unavailable, the restart fails, or provenance remains unverifiable, stop and explain that the user must restart/reconnect the configured AgentSCUMM MCP. Do not continue with the old instance. Record the returned server provenance and comparison result separately in `run.json`; preserve earlier startup records on resume. If `HEAD` or cleanliness changes during preflight, repeat the clean-revision checks before play.
+
+Reuse a healthy live session on the verified current MCP for the requested game when available. Otherwise call `launch_game` for the selected slug, poll `wait_for_ready` while loading, and `observe` the resulting screen. Open the spectator with `open_viewer` if needed. For a saved run, use the supported `continue` launch mode when appropriate. Do not restart or discard a live game merely to create a new notes directory. After a required MCP restart, reobserve the restored room and inventory rather than relying on the old session's state.
 
 ## Play toward completion
 
