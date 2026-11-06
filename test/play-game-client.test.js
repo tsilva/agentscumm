@@ -37,16 +37,16 @@ test('play-game client records MCP images and calls inside a resumable run', { t
   const runDir = path.join(root, '.internal/synthetic-game', `client-test-${randomUUID()}`);
   const args = ['--run-dir', runDir, '--no-viewer', '--base-url', fixture.url];
   const client = startClient(args);
-  client.child.stdin.write(JSON.stringify({ name: 'launch_game', arguments: { game: 'synthetic-game', mode: 'beginning' } }) + '\n');
+  client.child.stdin.write(JSON.stringify({ name: 'session', arguments: { operation: 'start', game: 'synthetic-game', mode: 'beginning' } }) + '\n');
   t.after(async () => {
     if (client.child.exitCode === null) client.child.kill('SIGTERM');
     await client.exited; await fixture.close(); await rm(runDir, { recursive: true, force: true });
   });
   const ready = await client.next();
   assert.equal(ready.ready, true); assert.equal(ready.runDir, runDir);
-  assert.ok(ready.tools.includes('launch_game'));
+  assert.ok(ready.tools.includes('session'));
   assert.equal((await client.next()).isError, false, 'Input queued during client startup must be retained');
-  const launched = await client.call('wait_for_ready', { timeout_ms: 15000 });
+  const launched = await client.call('status', { wait_ms: 15000 });
   assert.equal(launched.content[0].phase, 'ready');
   const observed = await client.call('observe');
   const image = observed.content.find(item => item.image);
@@ -71,7 +71,7 @@ test('play-game client records MCP images and calls inside a resumable run', { t
   assert.match(rejected.stderr, /use --resume/);
   const resumed = startClient([...args, '--resume']);
   assert.equal((await resumed.next()).ready, true);
-  assert.equal((await resumed.call('session_status')).content[0].phase, 'idle');
+  assert.equal((await resumed.call('status')).content[0].phase, 'idle');
   resumed.child.stdin.write('quit\n');
   assert.equal((await resumed.exited).code, 0);
 });

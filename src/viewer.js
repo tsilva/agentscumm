@@ -21,7 +21,7 @@ async function refresh(){
   const state=await response.json();
   const name=state.game?state.game.split('-').map((word,index)=>index>0&&['a','an','and','of','the','in'].includes(word)?word:word.charAt(0).toUpperCase()+word.slice(1)).join(' '):null;
   gameTitle=name?'AgentSCUMM - '+name:'AgentSCUMM';document.title=gameTitle;
-  const info=state.frame,bounds=info?.canvasBounds;
+  const info=state.frame,bounds=info?.displayBounds||info?.canvasBounds;
   if(!bounds){screen.hidden=true;lastId=null;}
   else if(info.id!==lastId){
    const frame=await fetch('frame/'+encodeURIComponent(info.id),{cache:'no-store'});

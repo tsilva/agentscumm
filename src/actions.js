@@ -6,15 +6,20 @@ export const actionSchema = z.discriminatedUnion('type', [
     button: z.enum(['left', 'right', 'middle']).default('left'),
     count: z.number().int().min(1).max(2).default(1), hold_ms: z.number().int().min(20).max(1000).default(80) }).strict(),
   z.object({ type: z.literal('move'), x: coordinate, y: coordinate }).strict(),
-  z.object({ type: z.literal('key'), key: z.string().min(1).max(40),
+  z.object({ type: z.literal('key'), key: z.string().min(1).max(40).describe(
+    'One letter/digit, F1-F12, ArrowUp/Down/Left/Right, Enter, Escape, Space, Tab, Backspace, Delete, Home, End, PageUp/Down, Shift, Control or Alt. Named keys are case-sensitive; use Space, not SPACE. No shortcut combinations.'),
     hold_ms: z.number().int().min(0).max(5000).default(80) }).strict(),
   z.object({ type: z.literal('wait'), milliseconds: z.number().int().min(0).max(10000) }).strict(),
+  z.object({ type: z.literal('screenshot') }).strict(),
   z.object({ type: z.literal('drag'), from_x: coordinate, from_y: coordinate, x: coordinate, y: coordinate,
     button: z.enum(['left', 'right']).default('left'), steps: z.number().int().min(2).max(30).default(10) }).strict(),
 ]);
 
 export function validateSequence(rawActions, width, height) {
   const actions = z.array(actionSchema).min(1).max(32).parse(rawActions);
+  if (actions.filter(action => action.type === 'screenshot').length > 8) {
+    throw new Error('Sequence exceeds the 8 explicit screenshot limit');
+  }
   let milliseconds = 0;
   for (const action of actions) {
     if ('x' in action && (action.x >= width || action.y >= height)) throw new Error('Coordinates are outside the screenshot');

@@ -91,6 +91,37 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   assert.equal(await countInputs(), afterFailure);
   runtime.execute = execute;
 
+  // Explicit captures occur at their exact sequence positions, without extra input.
+  const capture = runtime.capture.bind(runtime);
+  const captureClicks = [];
+  runtime.capture = async reason => {
+    if (reason === 'sequence-screenshot') captureClicks.push(await countInputs());
+    return capture(reason);
+  };
+  const survey = { session_id: started.sessionId, request_id: 'capture-order', after_ms: 0,
+    actions: [{ type: 'screenshot' }, { type: 'click', x: 200, y: 120 }, { type: 'screenshot' }] };
+  const beforeSurvey = await countInputs();
+  const surveyed = await runtime.act(survey);
+  assert.deepEqual(captureClicks, [beforeSurvey, beforeSurvey + 1]);
+  assert.deepEqual(surveyed.screenshots.map(frame => frame.step), [0, 2]);
+  // Cached captures survive rolling-buffer eviction, including byte-identical replay.
+  runtime.history.clear();
+  const surveyedAgain = await runtime.act(survey);
+  assert.equal(surveyedAgain.replayed, true);
+  assert.deepEqual(surveyedAgain.screenshots, surveyed.screenshots);
+  assert.equal(await countInputs(), beforeSurvey + 1);
+  runtime.capture = async reason => {
+    if (reason === 'sequence-screenshot') throw new Error('Synthetic capture failure');
+    return capture(reason);
+  };
+  const captureFailure = await runtime.act({ session_id: started.sessionId, request_id: 'capture-failure',
+    actions: [{ type: 'screenshot' }, { type: 'click', x: 200, y: 120 }] });
+  assert.equal(captureFailure.action.state, 'failed');
+  assert.equal(captureFailure.action.steps[0].state, 'capture-failed');
+  assert.equal(captureFailure.action.completed, 0);
+  assert.equal(await countInputs(), beforeSurvey + 1, 'No following click after failed capture');
+  runtime.capture = capture;
+
   // A replaced document cannot receive actions based on an old observation.
   await runtime.shell.goto(`${fixture.url}/scummvm.html`);
   await assert.rejects(runtime.act({ ...request, request_id: 'stale-document' }), /document changed/);

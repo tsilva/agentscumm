@@ -9,6 +9,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { FrameHistory } from './history.js';
 import { SerialQueue, validateSequence } from './actions.js';
 import { SpectatorViewer } from './viewer.js';
+import { installHealthObserver, readShellState, bounded } from './health.js';
+import { installDisplayObserver, displayBounds } from './display.js';
 
 export const games = [
   ['beneath-a-steel-sky', 'sky', true],
@@ -74,12 +76,13 @@ export class GameRuntime {
       dimensions: this.dimensions, coordinateSpace: 'CSS pixels relative to the screenshot top-left',
       bootPhase: this.bootPhase, readyReason: this.readyReason, message: this.message,
       loadingText: this.loadingText, lastNetworkError: this.lastNetworkError,
+      runtimeHealth: this.runtimeHealth,
       pendingRequests: [...this.pendingRequests.values()].slice(-5),
       connected: Boolean(this.context?.browser()?.isConnected() && this.page && !this.page.isClosed()),
       captureFpsRequested: this.fps, captureFailures: this.captureFailures,
       lastCaptureError: this.lastCaptureError, history: this.history.status(),
       viewerUrl: this.viewer.url, viewerOpen: this.viewer.isOpen, viewerError: this.viewerError,
-      recentActions: this.actions.slice(-8), capabilities: ['click', 'move', 'key', 'drag', 'wait', 'sequences', 'frame-history', 'spectator'] };
+      recentActions: this.actions.slice(-8), capabilities: ['click', 'move', 'key', 'drag', 'wait', 'screenshot', 'sequences', 'frame-history', 'spectator'] };
   }
 
   async log(type, payload = {}) {
@@ -107,6 +110,7 @@ export class GameRuntime {
       this.captureFailures = 0;
       this.lastCaptureError = null;
       this.pendingRequests.clear(); this.lastNetworkError = null; this.loadingText = null;
+      this.runtimeHealth = null; this.healthTask = null; this.lastHealthCheck = null;
       await mkdir(path.join(this.dataDir, 'runs'), { recursive: true, mode: 0o700 });
       this.logPath = path.join(this.dataDir, 'runs', `${this.sessionId}.jsonl`);
       const catalogGame = games.find(entry => entry.slug === game);
@@ -121,7 +125,7 @@ export class GameRuntime {
       // Launch asynchronously so MCP's tool timeout is independent of game downloads.
       this.bootTask = this.boot(sessionId).catch(async error => {
         if (this.sessionId !== sessionId || this.closing) return;
-        this.phase = 'error'; this.message = error.message;
+        this.phase = 'error'; this.message = error.message; this.readyReason = null;
         await this.log('launch-error', { message: error.message }).catch(() => {});
       });
       return this.status();
@@ -129,10 +133,23 @@ export class GameRuntime {
   }
 
   async boot(sessionId) {
+    // One monotonic budget covers browser startup, navigation and the runtime.
+    // Wall-clock jumps (including host sleep) must not expire a fresh launch.
+    const deadline = performance.now() + this.launchTimeoutMs;
+    const remaining = () => {
+      const value = deadline - performance.now();
+      if (value <= 0) throw new Error(`Game startup timed out at ${this.bootPhase}`);
+      return Math.ceil(value);
+    };
+    const startupProbe = operation => {
+      const budget = remaining();
+      return bounded(operation, Math.min(3000, budget), budget <= 3000
+        ? `Game startup timed out at ${this.bootPhase}` : 'Game renderer did not respond during startup');
+    };
     if (!this.context) {
       this.context = await chromium.launchPersistentContext(path.join(this.dataDir, 'chromium-profile'), {
         headless: true, viewport: this.dimensions, screen: this.dimensions, deviceScaleFactor: 1,
-        acceptDownloads: false,
+        acceptDownloads: false, timeout: remaining(),
       });
       this.context.setDefaultTimeout(5000);
       this.context.on('close', () => {
@@ -146,6 +163,8 @@ export class GameRuntime {
     for (const page of this.context.pages()) await page.close();
     this.page = await this.context.newPage();
     const page = this.page;
+    await page.addInitScript(installHealthObserver);
+    await page.addInitScript(installDisplayObserver);
     page.on('request', request => {
       const url = new URL(request.url());
       if (['http:', 'https:'].includes(url.protocol)) this.pendingRequests.set(request, { path: url.pathname, type: request.resourceType() });
@@ -164,34 +183,30 @@ export class GameRuntime {
     if (this.viewerMode) {
       try { await this.viewer.open(); } catch (error) { this.viewerError = error.message; }
     }
-    const response = await page.goto(this.gameUrl, { waitUntil: 'domcontentloaded', timeout: this.launchTimeoutMs });
+    const response = await page.goto(this.gameUrl, { waitUntil: 'domcontentloaded', timeout: remaining() });
     if (response && !response.ok()) throw new Error(`Game route returned HTTP ${response.status()}`);
     // ScummWEB's web-player controls are not part of the game or MCP input surface.
     await page.addStyleTag({ content: '.game-route-controls,.game-route-bottom-actions,.game-route-touch-cursor-pad-shell{display:none!important}' });
-    const deadline = Date.now() + this.launchTimeoutMs;
-    let renderedSamples = 0;
-    while (Date.now() < deadline && this.sessionId === sessionId && !this.closing) {
+    let renderedSamples = 0, startupToken;
+    while (performance.now() < deadline && this.sessionId === sessionId && !this.closing) {
       if (this.phase === 'disconnected' || this.phase === 'error') throw new Error(this.message);
       const shell = page.frames().find(frame => frame !== page.mainFrame() && /\/scummvm\.html(?:[?#]|$)/.test(frame.url()));
       if (shell) {
         if (this.shell !== shell) {
           this.shell = shell;
+          renderedSamples = 0;
+          // A frame URL can be visible before its HTML/head arrives. Styling
+          // that initial document throws instead of waiting for game startup.
+          this.bootPhase = 'loading-game-document';
+          await shell.waitForLoadState('domcontentloaded', { timeout: remaining() });
           await shell.addStyleTag({ content: '#canvas{outline:none!important;box-shadow:none!important}' });
         }
-        const state = await shell.evaluate(() => {
-          const ready = globalThis.__scummwebReadyState;
-          const status = document.getElementById('status');
-          const canvas = document.getElementById('canvas');
-          const seed = globalThis.__scummwebSkipIntroSeedStatus;
-          const style = status && getComputedStyle(status);
-          return { ready, seed, status: status?.textContent?.trim(),
-            loading: Boolean(style && style.display !== 'none' && style.visibility !== 'hidden' && status.textContent.trim()),
-            error: Boolean(status?.classList.contains('error')), canvas: Boolean(canvas?.width && canvas?.height) };
-        }).catch(() => null);
+        const state = await startupProbe(shell.evaluate(readShellState));
         if (state) {
+          if (startupToken !== state.token) { renderedSamples = 0; startupToken = state.token; }
           this.bootPhase = state.ready?.state || 'loading-runtime';
           this.loadingText = state.status;
-          if (state.error || state.seed?.state === 'error') throw new Error(state.seed?.message || state.status || 'Game startup failed');
+          if (state.failure || state.error || state.seed?.state === 'error') throw new Error(state.failure || state.seed?.message || state.status || 'Game startup failed');
           const seeded = new URL(this.gameUrl).hash === '#seed=0';
           if (state.ready?.state === 'ready' && (!this.expectedTarget || state.ready.target === this.expectedTarget) &&
             (!seeded || state.seed?.state === 'ready') && state.canvas && !state.loading) {
@@ -201,19 +216,22 @@ export class GameRuntime {
             const overlayVisible = await overlay.isVisible().catch(() => false);
             const frame = await this.capture('startup-check');
             const bounds = await this.canvas.boundingBox();
-            const rendered = !overlayVisible && bounds && await this.hasRenderedContent(frame, bounds);
+            const rendered = !overlayVisible && bounds && await startupProbe(this.hasRenderedContent(frame, bounds));
             renderedSamples = rendered ? renderedSamples + 1 : 0;
             if (renderedSamples >= 2) {
               await this.canvas.focus();
-              this.documentToken = await shell.evaluate(() => performance.timeOrigin);
+              this.documentToken = state.token;
               this.readyReason = state.ready.reason;
               this.phase = 'ready';
+              await this.checkHealth();
+              if (this.phase !== 'ready') throw new Error(this.message);
+              remaining();
               await this.capture('launch-ready');
               this.scheduleCapture(sessionId);
               await this.log('ready', { reason: this.readyReason, firstFrame: this.history.latest()?.id });
               return;
             }
-          }
+          } else renderedSamples = 0;
         }
       }
       await sleep(150);
@@ -243,7 +261,11 @@ export class GameRuntime {
     const tick = async () => {
       if (this.sessionId !== sessionId || this.closing || this.phase !== 'ready' || !this.page || this.page.isClosed()) return;
       const started = Date.now();
-      try { await this.capture('buffer'); this.lastCaptureError = null; }
+      try {
+        if (this.lastHealthCheck === null || performance.now() - this.lastHealthCheck >= 1000) await this.checkHealth();
+        if (this.phase !== 'ready') return;
+        await this.capture('buffer'); this.lastCaptureError = null;
+      }
       catch (error) { this.captureFailures++; this.lastCaptureError = error.message; }
       if (this.sessionId === sessionId && !this.closing) this.captureTimer = setTimeout(tick, Math.max(10, 1000 / this.fps - (Date.now() - started)));
     };
@@ -261,12 +283,14 @@ export class GameRuntime {
       const sessionId = this.sessionId;
       const phase = this.phase;
       const canvasBounds = phase === 'ready' && this.canvas ? await this.canvas.boundingBox() : null;
+      const renderedBounds = canvasBounds ? await bounded(this.canvas.evaluate(displayBounds, canvasBounds),
+        3000, 'Game renderer did not respond during capture') : null;
       // ScummVM can change its internal canvas resolution (including when opening menus).
       // Always expose one fixed viewport, including letterboxing, and address input in that space.
       const data = await this.page.screenshot({ type: 'jpeg', quality: 90, scale: 'css', timeout: 3000 });
       if (sessionId !== this.sessionId) throw new Error('Session changed during capture');
       const metadata = { sessionId, game: this.game, phase, reason,
-        ...this.dimensions, canvasBounds, actionId: this.currentActionId || null,
+        ...this.dimensions, canvasBounds, displayBounds: renderedBounds, actionId: this.currentActionId || null,
         step: this.currentStep ?? null };
       if (phase === 'ready' && this.phase === 'ready') return this.history.add(data, metadata);
       // Startup checks and explicit loading/error observations never enter the rolling buffer.
@@ -278,18 +302,49 @@ export class GameRuntime {
 
   async waitReady(timeoutMs = 25000) {
     const sessionId = this.sessionId;
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline && this.phase === 'loading' && this.sessionId === sessionId) await sleep(100);
+    const deadline = performance.now() + timeoutMs;
+    while (performance.now() < deadline && this.phase === 'loading' && this.sessionId === sessionId) await sleep(100);
+    return this.inspectStatus();
+  }
+
+  async inspectStatus() {
+    if (this.phase === 'ready') await this.checkHealth();
     return this.status();
+  }
+
+  async checkHealth() {
+    if (this.healthTask) return this.healthTask;
+    const sessionId = this.sessionId;
+    const shell = this.shell;
+    if (this.phase !== 'ready' || !shell) return;
+    const task = (async () => {
+      let state, failure, phase = 'error';
+      try {
+        state = await bounded(shell.evaluate(readShellState), 3000, 'Game renderer is unresponsive; restart the game to recover');
+        if (state.token !== this.documentToken) {
+          phase = 'disconnected'; failure = 'Game document changed; launch or reconnect explicitly before issuing input';
+        } else failure = state.failure || (state.error ? state.status || 'Game runtime error' : null) ||
+          (state.seed?.state === 'error' ? state.seed.message || 'Game checkpoint failed' : null);
+      } catch (error) { failure = error.message; }
+      if (this.sessionId !== sessionId || this.shell !== shell || this.phase !== 'ready') return;
+      this.lastHealthCheck = performance.now();
+      this.runtimeHealth = { checkedAt: Date.now(), state: failure ? 'failed' : 'responsive',
+        message: failure || null, errors: state?.errors || [] };
+      if (failure) {
+        this.phase = phase; this.message = failure; this.readyReason = null;
+        clearTimeout(this.captureTimer);
+        await this.log('runtime-failure', this.runtimeHealth).catch(() => {});
+      }
+    })();
+    this.healthTask = task;
+    try { await task; } finally { if (this.healthTask === task) this.healthTask = null; }
   }
 
   async assertReady(sessionId) {
     if (sessionId !== this.sessionId) throw new Error('Session ID does not match the current game');
     if (this.phase !== 'ready' || !this.page || this.page.isClosed()) throw new Error(`Game is not ready (${this.phase})`);
-    const token = await this.shell.evaluate(() => performance.timeOrigin).catch(() => null);
-    if (token !== this.documentToken) {
-      this.phase = 'disconnected'; throw new Error('Game document changed; launch or reconnect explicitly before issuing input');
-    }
+    await this.checkHealth();
+    if (this.phase !== 'ready') throw new Error(this.message || `Game is not ready (${this.phase})`);
     if (this.page.viewportSize()?.width !== this.dimensions.width || this.page.viewportSize()?.height !== this.dimensions.height) {
       this.phase = 'error'; throw new Error('Game viewport dimensions changed');
     }
@@ -323,7 +378,7 @@ export class GameRuntime {
       this.actions.push(record);
       if (this.actions.length > 100) this.actions.shift();
       this.currentActionId = actionId;
-      const result = { action: record, replayed: false };
+      const result = { action: record, replayed: false, screenshots: [] };
       // Reserve the request before any input: uncertain delivery must never be retried automatically.
       this.requests.set(requestId, { fingerprint, result });
       this.usedRequestIds.add(requestId);
@@ -339,18 +394,28 @@ export class GameRuntime {
           record.steps.push(step);
           const bounds = await this.canvas.boundingBox();
           if (!bounds) throw new Error('Game canvas is not visible');
-          await this.canvas.focus();
-          await this.execute(action, { x: 0, y: 0, ...this.dimensions }, inputSignal);
-          step.state = 'delivered'; record.completed++;
+          if (action.type === 'screenshot') {
+            const frame = await this.capture('sequence-screenshot');
+            result.screenshots.push(frame);
+            step.frameId = frame.id;
+            step.state = 'captured';
+          } else {
+            await this.canvas.focus();
+            await this.execute(action, { x: 0, y: 0, ...this.dimensions }, inputSignal);
+            step.state = 'delivered';
+          }
+          record.completed++;
           await this.log('action-step', { actionId, ...step });
+          await this.assertReady(sessionId);
         }
         if (afterMs) await sleep(afterMs, undefined, { signal: inputSignal });
+        await this.assertReady(sessionId);
         result.frame = await this.capture('after-action');
         record.state = 'completed';
       } catch (error) {
         record.state = 'failed'; record.error = error.message;
         const step = record.steps.at(-1);
-        if (step?.state === 'issuing') step.state = 'delivery-uncertain';
+        if (step?.state === 'issuing') step.state = step.type === 'screenshot' ? 'capture-failed' : 'delivery-uncertain';
         try { result.frame = await this.capture('failed-action'); } catch { /* Status remains available after renderer loss. */ }
       } finally {
         record.finishedAt = new Date().toISOString();
@@ -385,7 +450,10 @@ export class GameRuntime {
   async observe() {
     return this.queue.run(async () => {
       if (!this.page || this.page.isClosed()) throw new Error('Launch a game first');
-      if (this.phase === 'ready') await this.assertReady(this.sessionId);
+      if (this.phase === 'ready') {
+        try { await this.assertReady(this.sessionId); }
+        catch (error) { if (this.phase === 'ready') throw error; }
+      }
       return this.capture();
     });
   }

@@ -11,6 +11,7 @@ final class Spectator: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
     var window: NSWindow!
     var webView: WKWebView!
     var titleObservation: NSKeyValueObservation?
+    var lastGameSize: NSSize?
     let viewerURL: URL
     let width: Double
     let height: Double
@@ -86,12 +87,25 @@ final class Spectator: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
               width.isFinite, height.isFinite, (1...1920).contains(width), (1...1920).contains(height) else { return }
         let ratio = width / height
         let previous = window.contentAspectRatio
-        if abs(previous.width / previous.height - ratio) < 0.0001 { return }
-        window.contentAspectRatio = NSSize(width: width, height: height)
-        window.contentMinSize = NSSize(width: 320, height: 320 / ratio)
-        let available = window.screen?.visibleFrame.size ?? NSSize(width: 1920, height: 1080)
-        let targetWidth = min(window.contentView!.bounds.width, available.width, (available.height - 32) * ratio)
-        window.setContentSize(NSSize(width: targetWidth, height: targetWidth / ratio))
+        if abs(previous.width / previous.height - ratio) >= 0.0001 {
+            window.contentAspectRatio = NSSize(width: width, height: height)
+            window.contentMinSize = NSSize(width: 320, height: 320 / ratio)
+            let available = window.screen?.visibleFrame.size ?? NSSize(width: 1920, height: 1080)
+            let titleHeight = window.frame.height - window.contentView!.bounds.height
+            let targetWidth = min(window.contentView!.bounds.width, available.width, (available.height - titleHeight) * ratio)
+            window.setContentSize(NSSize(width: targetWidth, height: targetWidth / ratio))
+            if let visible = window.screen?.visibleFrame {
+                let frame = window.frame
+                window.setFrameOrigin(NSPoint(x: min(max(frame.minX, visible.minX), visible.maxX - frame.width),
+                                              y: min(max(frame.minY, visible.minY), visible.maxY - frame.height)))
+            }
+        }
+        let gameSize = NSSize(width: width, height: height)
+        if lastGameSize != gameSize {
+            lastGameSize = gameSize
+            emit(["event": "geometry", "gameWidth": width, "gameHeight": height,
+                  "contentWidth": webView.bounds.width, "contentHeight": webView.bounds.height])
+        }
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
@@ -131,7 +145,7 @@ guard arguments.count == 4,
       url.path.range(of: "^/[0-9a-f]{48}/?$", options: .regularExpression) != nil,
       let width = Double(arguments[2]), let height = Double(arguments[3]),
       (320...1920).contains(width), (320...2100).contains(height) else {
-    fputs("AgentSCUMM is opened by the MCP server's launch_game or open_viewer tool.\n", stderr)
+    fputs("AgentSCUMM is opened by the MCP server's session tool (start or open_viewer).\n", stderr)
     exit(1)
 }
 let app = NSApplication.shared

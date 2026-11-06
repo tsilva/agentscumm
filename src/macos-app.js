@@ -71,6 +71,13 @@ export class MacOSSpectator {
       { stdio: ['pipe', 'pipe', 'ignore'] });
     this.exited = new Promise(resolve => { this.child.once('exit', resolve); this.child.once('error', resolve); });
     const lines = createInterface({ input: this.child.stdout });
+    this.exited.then(() => lines.close());
+    lines.on('line', line => {
+      try {
+        const event = JSON.parse(line);
+        if (event.event === 'geometry') this.windowGeometry = event;
+      } catch { /* Ignore non-protocol output from the native app. */ }
+    });
     try {
       this.launchInfo = await new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('macOS spectator startup timed out')), 15000);
@@ -85,7 +92,6 @@ export class MacOSSpectator {
         });
       });
     } catch (error) { await this.close(); throw error; }
-    finally { lines.close(); }
   }
 
   async close() {

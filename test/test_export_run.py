@@ -75,6 +75,22 @@ class ExportTests(unittest.TestCase):
     def export(self, **kwargs):
         return EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo, **kwargs)
 
+    def test_merged_session_tool_and_screenshot_steps_are_archived(self):
+        rows = fixture()
+        rows[5]["payload"]["item"].update(tool="session",
+            arguments={"operation": "start", "game": "synthetic-game"})
+        rows[6]["payload"]["item"]["arguments"]["actions"].append({"type": "screenshot"})
+        self.source(rows)
+        path, stats = self.export(run_id="merged-tools")
+        self.assertEqual(stats["actions"]["screenshot"], 1)
+        self.assertEqual(stats["total_actions"], 3)
+        self.assertEqual(stats["action_sequences"]["max_length"], 3)
+        self.assertEqual(EXPORT.verify_run(path), stats)
+        rows[5]["payload"]["item"]["arguments"]["game"] = "different-game"
+        self.source(rows)
+        with self.assertRaisesRegex(ValueError, "different game"):
+            self.export(run_id="wrong-game")
+
     def test_round_trip_preserves_conversation_and_links_all_image_copies(self):
         self.source()
         original = self.rollout.read_bytes()
@@ -589,6 +605,35 @@ class ExportTests(unittest.TestCase):
             for data in (PNG, other)]
         rows.insert(6, record("response_item", {"type": "custom_tool_call", "call_id": "forward-call",
             "input": 'const r=await tools.mcp__agentscumm__review({count:2});for(const c of r.content??[]) {if(c.type==="image")image(c);else if(c.type==="text")text(c.text);}'}, 2))
+        self.source(rows)
+        path, stats = self.export()
+        self.assertEqual(stats["screenshots"]["recovered_spanning_tool_summaries"], 1)
+        self.assertEqual(stats["screenshots"]["unique_files"], 2)
+        self.assertEqual(stats["screenshots"]["unresolved"], [])
+        self.assertIn("Intermediate metadata was not recorded", (path / "trajectory.jsonl").read_text())
+        self.assertEqual(EXPORT.verify_run(path), stats)
+
+    def test_merged_observe_history_truncation_preserves_full_sequence(self):
+        rows = fixture()
+        other = base64.b64encode(b"another-full-image" * 15).decode()
+        frame = {"id": "frame-42", "sessionId": SESSION, "mimeType": "image/png", "width": 1}
+        result = {"content": [
+            {"type": "text", "text": json.dumps({"selectedFrames": 2})},
+            {"type": "text", "text": json.dumps(frame)},
+            {"type": "image", "mimeType": "image/png", "data": PNG},
+            {"type": "text", "text": json.dumps({**frame, "id": "frame-43"})},
+            {"type": "image", "mimeType": "image/png", "data": other}]}
+        raw = json.dumps(result)
+        lo, hi = raw.index(PNG) + 20, raw.index(other) + len(other) - 20
+        truncated = raw[:lo] + f"…{hi - lo} chars truncated…" + raw[hi:]
+        rows[6]["payload"]["item"].update(tool="observe", arguments={"source": "history", "count": 2},
+            result={"content": [{"type": "text", "text": truncated}]})
+        rows[7]["payload"]["call_id"] = "forward-call"
+        rows[7]["payload"]["output"] = [
+            {"type": "input_image", "image_url": "data:image/png;base64," + data}
+            for data in (PNG, other)]
+        rows.insert(6, record("response_item", {"type": "custom_tool_call", "call_id": "forward-call",
+            "input": 'const r=await tools.mcp__agentscumm__observe({source:"history",count:2});for(const c of r.content??[]) {if(c.type==="image")image(c);else if(c.type==="text")text(c.text);}'}, 2))
         self.source(rows)
         path, stats = self.export()
         self.assertEqual(stats["screenshots"]["recovered_spanning_tool_summaries"], 1)

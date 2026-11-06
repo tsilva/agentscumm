@@ -13,7 +13,7 @@
     "test": "node --test test/*.test.js && pnpm test:export",
     "test:export": "python3 -B -m unittest discover -s test -p 'test_*run.py' -v",
     "test:live": "node scripts/smoke-live.js",
-    "check": "node --check src/index.js && node --check src/runtime.js && node --check src/viewer.js && node --check src/history.js && node --check src/actions.js && node --check src/macos-app.js && node --check scripts/build-macos-app.js"
+    "check": "node --check src/index.js && node --check src/runtime.js && node --check src/health.js && node --check src/display.js && node --check src/viewer.js && node --check src/history.js && node --check src/actions.js && node --check src/macos-app.js && node --check scripts/build-macos-app.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",

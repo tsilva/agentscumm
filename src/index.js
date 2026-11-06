@@ -19,10 +19,10 @@ const runtime = new GameRuntime({ viewer: !values['no-viewer'], baseUrl: values[
   bufferSeconds: values['buffer-seconds'] ? Number(values['buffer-seconds']) : undefined });
 
 const server = new McpServer({ name: 'agentscumm', version: '0.1.0' }, {
-  instructions: 'Launch a ScummWEB game, poll wait_for_ready until phase=ready, then observe and act. '
+  instructions: 'Start a ScummWEB game with session(operation="start"), poll status(wait_ms=10000) until phase=ready, then observe and act. '
     + 'Coordinates are screenshot-relative CSS pixels. Supply session_id and a unique request_id for each action sequence; '
     + 'reuse the same request_id only to retrieve the identical request result after an uncertain response. '
-    + 'Input delivery is not proof of puzzle success. Review recent frames for missed events. The spectator is read-only.',
+    + 'Input delivery is not proof of puzzle success. Use observe(source="history") for missed events. The spectator is read-only.',
 });
 
 const text = value => ({ type: 'text', text: JSON.stringify(value) });
@@ -38,50 +38,62 @@ function tool(name, description, inputSchema, callback, readOnly = false) {
 tool('list_games', 'List known ScummWEB game slugs. Launch also accepts future catalog slugs.', {},
   async () => ({ content: [text({ baseUrl: runtime.baseUrl.origin, games })] }), true);
 
-tool('launch_game', 'Start an owned Chromium game session and read-only spectator. Returns immediately; poll wait_for_ready. Reusing an active game does not restart it unless restart=true.', {
-  game: z.string().default('flight-of-the-amazon-queen'),
-  mode: z.enum(['skip_intro', 'beginning', 'continue']).default('skip_intro'),
-  restart: z.boolean().default(false),
-}, async args => ({ content: [text(await runtime.start(args))] }));
+tool('session', 'Manage the owned game session: start returns immediately; close preserves saves and clears history; open_viewer opens the read-only spectator. Only start accepts game/mode/restart. Starting the active game reuses it unless restart=true. Poll status for readiness.', {
+  operation: z.enum(['start', 'close', 'open_viewer']),
+  game: z.string().optional().describe('Start only; defaults to flight-of-the-amazon-queen.'),
+  mode: z.enum(['skip_intro', 'beginning', 'continue']).optional().describe('Start only; defaults to skip_intro.'),
+  restart: z.boolean().optional().describe('Start only; defaults to false.'),
+}, async ({ operation, ...args }) => {
+  if (operation !== 'start' && Object.values(args).some(value => value !== undefined)) {
+    throw new Error('game, mode and restart are valid only for session(operation="start")');
+  }
+  if (operation === 'start') return { content: [text(await runtime.start(args))] };
+  if (operation === 'close') return { content: [text(await runtime.closeGame())] };
+  return { content: [text({ viewerUrl: await runtime.viewer.open() })] };
+});
 
-tool('session_status', 'Inspect launch progress, connection, video-buffer coverage, viewer, and recent input results.', {},
-  async () => ({ content: [text(runtime.status())] }), true);
+tool('status', 'Check renderer/runtime health, startup progress, connection, history coverage, spectator and recent actions. Optional wait_ms waits up to 25 seconds while loading. Ready means rendered startup content; inspect the screen for menus or intros.', {
+  wait_ms: z.number().int().min(0).max(25000).default(0),
+}, async ({ wait_ms }) => ({ content: [text(await runtime.waitReady(wait_ms))] }), true);
 
-tool('wait_for_ready', 'Wait up to 25 seconds for launch progress. phase=ready means a rendered startup frame, not necessarily that an intro/menu is finished. Repeat while loading.', {
-  timeout_ms: z.number().int().min(0).max(25000).default(10000),
-}, async ({ timeout_ms }) => ({ content: [text(await runtime.waitReady(timeout_ms))] }), true);
+tool('observe', 'Read game images without input. fresh (default) captures now, including loading/error screens; frames retrieves 1–8 exact frame_ids; history samples recent frames using seconds/count or action_id. Unavailable frames are errors, never replaced by fresh images. Loading/error captures are unbuffered.', {
+  source: z.enum(['fresh', 'frames', 'history']).default('fresh'),
+  frame_ids: z.array(z.string()).min(1).max(8).optional(),
+  seconds: z.number().min(0.1).max(300).optional(),
+  count: z.number().int().min(1).max(8).optional(),
+  action_id: z.string().optional(),
+}, async ({ source, frame_ids, seconds, count, action_id }) => {
+  if (source !== 'frames' && frame_ids !== undefined) throw new Error('frame_ids requires source="frames"');
+  if (source !== 'history' && [seconds, count, action_id].some(value => value !== undefined)) {
+    throw new Error('seconds, count and action_id require source="history"');
+  }
+  if (source === 'fresh') return { content: imageContent({ ...await runtime.observe(), source }) };
+  if (source === 'frames') {
+    if (!frame_ids) throw new Error('source="frames" requires frame_ids');
+    const frames = frame_ids.map(id => {
+      const frame = runtime.history.get(id);
+      if (!frame) throw new Error(`Frame expired or does not exist: ${id}`);
+      return frame;
+    });
+    return { content: frames.flatMap(frame => imageContent({ ...frame, source })) };
+  }
+  const frames = runtime.history.review({ seconds: seconds ?? 15, count: count ?? 4, actionId: action_id });
+  return { content: [text({ source, selectedFrames: frames.length, history: runtime.history.status() }),
+    ...frames.flatMap(frame => imageContent({ ...frame, source }))] };
+}, true);
 
-tool('observe', 'Capture a fresh game screenshot as an MCP image, with its frame ID, dimensions, phase and session ID. During loading the image shows the full player page.', {},
-  async () => ({ content: imageContent(await runtime.observe()) }), true);
-
-tool('act', 'Execute a serialized, bounded sequence of click/move/key/drag/wait inputs, then return a screenshot and per-step delivery status. Stops on failure; never automatically repeats input. Reuse request_id only with identical arguments to retrieve the cached result (last 100 requests in this session).', {
+tool('act', 'Execute at most 32 ordered click/move/key/drag/wait/screenshot steps, including up to 8 explicit screenshots, with a 20-second hold/wait budget. Returns each requested screenshot with its step index plus a final screenshot and per-step status. Stops on failure and retains partial captures; no conditional execution. Reuse request_id only with identical arguments to retrieve the cached result without repeating input (last 100 requests).', {
   session_id: z.string().uuid(), request_id: z.string().min(1).max(100),
   frame_id: z.string().optional(), actions: z.array(actionSchema).min(1).max(32),
   after_ms: z.number().int().min(0).max(3000).default(200),
 }, async (args, signal) => {
-  const { frame, ...result } = await runtime.act(args, signal);
-  return { isError: result.action.state === 'failed', content: [text(result), ...(frame ? imageContent(frame) : [])] };
+  const { frame, screenshots, ...result } = await runtime.act(args, signal);
+  return { isError: result.action.state === 'failed', content: [
+    text({ ...result, selectedFrames: screenshots.length + Number(Boolean(frame)),
+      screenshots: screenshots.map(frame => ({ step: frame.step, frame_id: frame.id })) }),
+    ...screenshots.flatMap(imageContent), ...(frame ? imageContent(frame) : []),
+  ] };
 });
-
-tool('review', 'Retrieve evenly spaced recent frames as timestamped MCP images. Optionally select frames associated with one action ID. Missing/evicted history is reported, never reconstructed.', {
-  seconds: z.number().min(0.1).max(300).default(15),
-  count: z.number().int().min(1).max(8).default(4), action_id: z.string().optional(),
-}, async ({ seconds, count, action_id }) => {
-  const frames = runtime.history.review({ seconds, count, actionId: action_id });
-  return { content: [text({ selectedFrames: frames.length, history: runtime.history.status() }), ...frames.flatMap(imageContent)] };
-}, true);
-
-tool('get_frame', 'Retrieve one full-resolution retained frame by its ID.', { frame_id: z.string() }, async ({ frame_id }) => {
-  const frame = runtime.history.get(frame_id);
-  if (!frame) throw new Error('Frame expired or does not exist; use review or observe');
-  return { content: imageContent(frame) };
-}, true);
-
-tool('open_viewer', 'Open or reopen the read-only live spectator window. Its mouse, keyboard and size cannot control the game.', {},
-  async () => ({ content: [text({ viewerUrl: await runtime.viewer.open() })] }));
-
-tool('close_game', 'Close the current game page without deleting its browser saves or cache. Buffered frames are cleared.', {},
-  async () => ({ content: [text(await runtime.closeGame())] }));
 
 let shuttingDown = false;
 async function shutdown() {

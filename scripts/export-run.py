@@ -478,7 +478,9 @@ class Screenshots:
                         _, forwarded = pending["calls"].pop(selected)
                         if forwarded:
                             images = list(self.native_images(row))
-                            expected = self.selected_frames(item.get("result")) if item.get("tool") == "review" else len(images)
+                            expected = self.selected_frames(item.get("result"))
+                            if expected is None:
+                                expected = len(images)
                             pending["groups"].append((number, images, expected))
             elif row.get("type") == "response_item" and payload.get("type") == "custom_tool_call_output" and pending:
                 if payload.get("call_id") == pending["call_id"]:
@@ -681,7 +683,8 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                                         revisions.append(revision)
                                 if args.get("session_id"):
                                     sessions.add(args["session_id"])
-                                if item.get("tool") == "launch_game" and args.get("game"):
+                                if (item.get("tool") == "launch_game" or
+                                        (item.get("tool") == "session" and args.get("operation") == "start")) and args.get("game"):
                                     observed_games.add(args["game"])
                                 if item.get("tool") == "act":
                                     sequence_lengths.append(len(args.get("actions", [])))
