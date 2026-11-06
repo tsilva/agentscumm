@@ -1,6 +1,12 @@
-# AgentSCUMM
+<p align="center">
+  <img src="logo.png" alt="AgentSCUMM Cursor Detective logo" width="256" />
+  <br />
+  <!-- repo-tagline:start -->
+  <strong>🕹️ Give AI agents controls for point-and-click adventures 🧭</strong>
+  <!-- repo-tagline:end -->
+</p>
 
-<img src="logo.png" alt="AgentSCUMM Cursor Detective logo" width="256" />
+# AgentSCUMM
 
 Give Codex reliable controls and visual history for point-and-click games running on [ScummWEB](https://scummweb.tsilva.eu).
 
