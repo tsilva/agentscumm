@@ -6,6 +6,12 @@
       "path": "image-assets/sources/logo-source.png",
       "sha256": "739f455a2abda0d469fe7065cd758925c9f8c3b5ab959946a9feec199ce3dec9",
       "evidence": "Generated with native Codex ImageGen. The original PNG contains embedded Content Credentials data."
+    },
+    {
+      "path": "image-assets/sources/app-icon-source.png",
+      "sha256": "92ccd725d68e1b690e9e2f2e639cdb2a2863fba09590b8e03099d494bc2d6d0c",
+      "evidence": "Generated with built-in Codex ImageGen from the user-selected Cursor Detective concept.",
+      "prompt": "Isolate the approved Cursor Detective teal rounded-square icon: cream pixel cursor hat, amber brim and coat, dark silhouette and cream face. Preserve the approved design; remove wallpaper, headings, Dock and other icons. Center on a square canvas with transparent margins and no outside cast shadow. Follow-up: remove exterior cyan speckles while preserving the complete icon design and alpha transparency."
     }
   ],
   "exports": [
@@ -14,6 +20,13 @@
       "path": "logo.png",
       "sha256": "77333c62ffa71416d38c993eaf8edbdfdfc60064ae9a426282eb4732bbaf4316",
       "source": "image-assets/sources/logo-source.png"
+    },
+    {
+      "role": "macos-app-icon",
+      "path": "macos/AppIcon.png",
+      "sha256": "ea930cef27cd72a933667fdaa019c23ecf0b20e6c03479c67f8630c8bf3526ab",
+      "source": "image-assets/sources/app-icon-source.png",
+      "transform": "Resized to 1024 by 1024 with macOS sips; alpha preserved."
     }
   ]
 }

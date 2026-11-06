@@ -1,0 +1,4 @@
+interface:
+  display_name: "agentscumm: Price Thread"
+  short_description: "Calculate a chat's API cost from recorded token usage"
+  default_prompt: "Use $agentscumm_price-thread to calculate the API-equivalent cost of the conversation I name using its recorded models and current official rates."

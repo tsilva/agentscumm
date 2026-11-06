@@ -1,0 +1,4 @@
+interface:
+  display_name: "agentscumm: Play Game"
+  short_description: "Play a named game with MCP controls and persistent notes"
+  default_prompt: "Use $agentscumm_play-game to launch the game I name and keep playing toward its ending."

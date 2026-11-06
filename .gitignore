@@ -1,3 +1,7 @@
 /INBOX.md
 /.local/repo-inbox/
 .DS_Store
+/node_modules/
+/.internal/
+/runs/
+/.agentscumm/
