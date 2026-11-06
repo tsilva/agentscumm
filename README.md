@@ -38,6 +38,8 @@ Before gameplay, the skill synchronizes the current branch and verifies that the
 
 The game loads, a read-only spectator opens, and Codex starts playing toward the ending. You can request a milestone, pause, or resume a saved run. Closing the spectator leaves the game running; closing the MCP server ends the active session. Recovery depends on saves made inside the game.
 
+Run multiple agents in parallel by giving each its own MCP server process. Servers automatically isolate their game profiles, logs, history, and spectators. Use `--instance agent-a` and `--instance agent-b` for named profiles that retain saves across server restarts; see [parallel instances](docs/usage.md#parallel-instances).
+
 The first macOS spectator launch builds its native app automatically. For setup alternatives, global skill installation, and troubleshooting, see [usage and controls](docs/usage.md).
 
 ## What it does

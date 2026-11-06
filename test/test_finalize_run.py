@@ -9,8 +9,9 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
-from test_export_run import fixture, record, THREAD
+from test_export_run import fixture, record, rates_fixture, THREAD
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,11 +30,16 @@ class FinalizationTests(unittest.TestCase):
         (self.repo / ".gitignore").write_text("/runs/\n/.internal/\n")
         self.work = FINAL.private_directory(self.repo, self.repo / ".internal/synthetic-game/run-one")
         self.rollout = self.repo / "rollout.jsonl"
+        rates = self.work / "pricing-rates.json"
+        rates.write_text(json.dumps(rates_fixture()))
+        lookup = patch.object(FINAL.EXPORT.PRICING, "fetch_rates", return_value=rates_fixture())
+        lookup.start()
+        self.addCleanup(lookup.stop)
         self.request = {"repo": str(self.repo), "work_dir": str(self.work), "rollout": str(self.rollout),
                         "turn_id": "turn-1", "game_id": "synthetic-game", "game_title": "Synthetic Adventure",
                         "completion_note": "Ending observed. Private notes /Users/operator/private " + THREAD,
                         "timeout_seconds": 0.05, "walkthrough_urls": ["https://example.org/guide"], "skills": [],
-                        "agent_context": None, "run_id": None}
+                        "agent_context": None, "run_id": None, "pricing_rates": str(rates)}
 
     def source(self, rows):
         self.rollout.write_text("".join(json.dumps(row) + "\n" for row in rows))
@@ -58,6 +64,8 @@ class FinalizationTests(unittest.TestCase):
         state = FINAL.finalize(self.request)
         self.assertEqual(state["status"], "completed")
         self.assertTrue(state["verified"])
+        self.assertEqual(state["api_cost_status"], "priced")
+        self.assertEqual(state["total_api_price_usd"], "0.000267")
         stats = FINAL.EXPORT.verify_run(state["archive"])
         self.assertEqual(stats["total_actions"], 2)
         self.assertEqual(stats["total_action_sequences"], 1)
@@ -214,12 +222,14 @@ class FinalizationTests(unittest.TestCase):
         self.assertTrue(all(line.startswith("|") for line in table))
         parsed = [[cell.strip() for cell in re.sub(r"<!--.*?-->", "", line).split("|")[1:-1]] for line in table[2:]]
         self.assertEqual(len(parsed), 2)
-        self.assertTrue(all(len(row) == 9 for row in parsed))
+        self.assertTrue(all(len(row) == 13 for row in parsed))
         self.assertEqual(parsed[0][0], "✅")
         self.assertEqual(parsed[0][3], "test-model / high")
         self.assertEqual(parsed[1][3], "comparison-model / high")
-        self.assertEqual(parsed[0][7:], ["2", "1"])
-        self.assertEqual(parsed[1][7:], ["3", "1"])
+        self.assertEqual(parsed[0][7:11], ["100", "20", "70", "$0.000267 (Standard assumed)"])
+        self.assertEqual(parsed[1][7:11], ["100", "20", "70", "$0.000267 (Standard assumed)"])
+        self.assertEqual(parsed[0][11:], ["2", "1"])
+        self.assertEqual(parsed[1][11:], ["3", "1"])
         self.assertEqual(parsed[1][6], f"{stats['tokens']['total_tokens']:,}")
         self.assertEqual(parsed[1][4], "Unspecified")
         self.assertIn("Editorial note retained.", text)
@@ -239,6 +249,41 @@ class FinalizationTests(unittest.TestCase):
         self.assertEqual(parsed[5], "00:00:07")
         self.assertEqual(len(row.splitlines()), 1)
         self.assertNotIn("Europe/", row)
+
+    def test_legacy_table_upgrade_preserves_rows_notes_and_registration_identity(self):
+        self.source(fixture(complete=True))
+        archive, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo,
+            status="completed", completion_note="Ending observed")
+        cells = [cell.strip() for cell in FINAL.benchmark_entry(stats).strip().split("|")[1:-1]]
+        del cells[7:11]
+        row = "| " + " | ".join(cells) + " |\n"
+        path = self.repo / "BENCHMARKS.md"
+        path.write_text("# Benchmarks\n\n" + FINAL.LEGACY_BENCHMARK_HEADER + "\n"
+                        + FINAL.LEGACY_BENCHMARK_SEPARATOR + "\n" + row + "\nEditorial note preserved.\n")
+        self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
+        upgraded = path.read_text()
+        self.assertEqual(upgraded.count("<!-- agentscumm:benchmark:"), 1)
+        self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
+        self.assertIn("| 100 | 20 | 70 | $0.000267 (Standard assumed) |", upgraded)
+        self.assertIn("Editorial note preserved.", upgraded)
+        self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
+        self.assertEqual(path.read_text(), upgraded)
+        # A different legacy row may already have been migrated with unknowns.
+        unknown = upgraded.replace("| 100 | 20 | 70 | $0.000267 (Standard assumed) |",
+                                   "| Unknown | Unknown | Unknown | Unknown |")
+        path.write_text(unknown)
+        self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
+        self.assertEqual(path.read_text(), upgraded)
+
+    def test_missing_price_is_unknown_and_zero_price_is_retained(self):
+        self.source(fixture())
+        _, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo)
+        stats.pop("api_cost")
+        self.assertEqual(FINAL.benchmark_usage(stats), ["100", "20", "70", "Unknown"])
+        stats["api_cost"] = {"status": "unavailable", "total_api_price_usd": None}
+        self.assertEqual(FINAL.benchmark_usage(stats)[-1], "Unknown")
+        stats["api_cost"] = {"status": "priced", "total_api_price_usd": "0"}
+        self.assertEqual(FINAL.benchmark_usage(stats)[-1], "$0")
 
 
 if __name__ == "__main__":

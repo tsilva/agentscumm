@@ -11,6 +11,7 @@ import { SerialQueue, validateSequence } from './actions.js';
 import { SpectatorViewer } from './viewer.js';
 import { installHealthObserver, readShellState, bounded } from './health.js';
 import { installDisplayObserver, displayBounds, captureBounds } from './display.js';
+import { claimDataDir } from './instances.js';
 
 export const games = [
   ['beneath-a-steel-sky', 'sky', true],
@@ -54,7 +55,15 @@ export class GameRuntime {
     if (!Number.isFinite(this.fps) || this.fps < 1 || this.fps > 15) throw new Error('Capture FPS must be between 1 and 15');
     const seconds = options.bufferSeconds ?? 60;
     if (!Number.isFinite(seconds) || seconds < 1 || seconds > 300) throw new Error('Buffer duration must be between 1 and 300 seconds');
-    this.dataDir = path.resolve(options.dataDir || path.join(projectRoot, '.agentscumm'));
+    if (options.instance !== undefined && !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(options.instance)) {
+      throw new Error('Instance must be 1–64 lowercase letters, digits, hyphens or underscores, starting with a letter or digit');
+    }
+    if (options.instance !== undefined && options.dataDir !== undefined) {
+      throw new Error('Choose either --instance or --data-dir, not both');
+    }
+    this.instanceId = options.instance ?? `auto-${randomUUID()}`;
+    this.instanceLabel = options.instance ?? this.instanceId.slice(0, 13);
+    this.dataDir = path.resolve(options.dataDir || path.join(projectRoot, '.agentscumm', 'instances', this.instanceId));
     this.history = new FrameHistory({ seconds, maxFrames: Math.ceil(seconds * this.fps) + 100 });
     this.queue = new SerialQueue();
     this.phase = 'idle';
@@ -75,6 +84,7 @@ export class GameRuntime {
     const frame = this.phase === 'ready' ? this.history.latest() : null;
     return { phase: this.phase, sessionId: this.sessionId, game: this.game, url: this.gameUrl,
       sourceRevision: this.sourceRevision,
+      instanceId: this.instanceId, instanceLabel: this.instanceLabel, serverPid: process.pid, dataDir: this.dataDir,
       dimensions: frame ? { width: frame.width, height: frame.height } : this.dimensions,
       viewportDimensions: this.dimensions, coordinateSpace: 'CSS pixels relative to the screenshot top-left',
       bootPhase: this.bootPhase, readyReason: this.readyReason, message: this.message,
@@ -125,6 +135,7 @@ export class GameRuntime {
       this.gameUrl = url.toString();
       this.expectedTarget = catalogGame?.target;
       await this.log('launch', { game, mode, url: this.gameUrl, dimensions: this.dimensions,
+        instanceId: this.instanceId, dataDir: this.dataDir,
         sourceRevision: this.sourceRevision });
       const sessionId = this.sessionId;
       // Launch asynchronously so MCP's tool timeout is independent of game downloads.
@@ -152,10 +163,20 @@ export class GameRuntime {
         ? `Game startup timed out at ${this.bootPhase}` : 'Game renderer did not respond during startup');
     };
     if (!this.context) {
-      this.context = await chromium.launchPersistentContext(path.join(this.dataDir, 'chromium-profile'), {
-        headless: true, viewport: this.dimensions, screen: this.dimensions, deviceScaleFactor: 1,
-        acceptDownloads: false, timeout: remaining(),
-      });
+      this.releaseDataDir ||= await claimDataDir(this.dataDir);
+      try {
+        this.context = await chromium.launchPersistentContext(path.join(this.dataDir, 'chromium-profile'), {
+          headless: true, viewport: this.dimensions, screen: this.dimensions, deviceScaleFactor: 1,
+          acceptDownloads: false, timeout: remaining(),
+        });
+      } catch (error) {
+        // Also preserve Chromium's own lock, including profiles opened by
+        // servers predating the AgentSCUMM ownership guard.
+        if (/ProcessSingleton|SingletonLock|profile.*in use/i.test(error.message)) {
+          throw new Error('Browser profile is already in use. Choose a different --instance or --data-dir, or omit both for an isolated instance.');
+        }
+        throw error;
+      }
       this.context.setDefaultTimeout(5000);
       this.context.on('close', () => {
         this.context = null;
@@ -508,6 +529,8 @@ export class GameRuntime {
     await this.context?.close();
     this.context = null;
     await this.viewer.close();
+    await this.releaseDataDir?.();
+    this.releaseDataDir = null;
     this.phase = 'closed';
   }
 }

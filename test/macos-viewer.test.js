@@ -70,3 +70,33 @@ test('macOS spectator has app identity, receives frames, and reopens independent
   await runtime.close();
   assert.equal(runtime.status().viewerOpen, false);
 });
+
+test('parallel games have separate native spectator processes and lifetimes', {
+  skip: process.platform !== 'darwin', timeout: 60000,
+}, async t => {
+  const fixture = await startFixture();
+  const directory = await mkdtemp(path.join(tmpdir(), 'agentscumm-native-parallel-'));
+  const runtimes = ['agent-a', 'agent-b'].map(name => new GameRuntime({
+    baseUrl: fixture.url, dataDir: path.join(directory, name), fps: 2,
+  }));
+  t.after(async () => {
+    await Promise.all(runtimes.map(runtime => runtime.close()));
+    await fixture.close();
+    await rm(directory, { recursive: true, force: true });
+  });
+  await Promise.all(runtimes.map(runtime => runtime.start()));
+  const statuses = await Promise.all(runtimes.map(runtime => runtime.waitReady(20000)));
+  for (const state of statuses) {
+    assert.equal(state.phase, 'ready', state.message);
+    assert.equal(state.viewerOpen, true, state.viewerError);
+  }
+  assert.notEqual(runtimes[0].viewer.native.child.pid, runtimes[1].viewer.native.child.pid);
+  assert.notEqual(statuses[0].viewerUrl, statuses[1].viewerUrl);
+  let frames = 0;
+  runtimes[1].viewer.server.on('request', request => { if (request.url.includes('/frame/')) frames++; });
+  await runtimes[0].close();
+  for (let attempt = 0; attempt < 50 && frames < 2; attempt++) await sleep(100);
+  assert.ok(frames >= 2, 'The surviving native spectator continues receiving frames');
+  assert.equal(runtimes[1].viewer.native.isOpen, true);
+  assert.equal((await runtimes[1].observe()).phase, 'ready');
+});

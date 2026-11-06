@@ -18,7 +18,7 @@ runs/<game-id>/<yyyymmdd>-<run-id>/
     └── screenshot-<sha256>.jpg
 ```
 
-The date is the conversation's start date in Europe/Lisbon. The run ID defaults to its conversation UUID; `--run-id` can provide a different identifier. Python 3.9 or newer is required. No Python packages or model API calls are needed.
+The date is the conversation's start date in Europe/Lisbon. The run ID defaults to its conversation UUID; `--run-id` can provide a different identifier. Python 3.9 or newer is required. No Python packages or model API calls are needed. Export makes a bounded public HTTPS pricing lookup; verification works offline.
 
 After observing the game's ending and letting the gameplay conversation finish its turn, export its local Codex rollout:
 
@@ -51,6 +51,7 @@ Screenshot IDs derive from their full image bytes. Identical images share a file
 - Recorded harness name/version/provider, model IDs, reasoning levels, and token usage grouped by model and effort.
 - Git commit IDs and branches: `git.conversation` preserves the checkout recorded when the conversation started; `git.agentscumm_runtime` preserves server-start revisions returned by AgentSCUMM; `git.exporter` separately records the export checkout. Dirty working trees are flagged where recorded. Missing startup provenance remains explicitly unknown; an export-time commit is never substituted for it. A conversation checkout commit does not establish the deployed ScummWEB revision.
 - Total input, cached input, uncached input, output, reasoning output, request count, and uncached-input-plus-output tokens. Cached input is already part of input; reasoning is already part of output.
+- `api_cost`: API-equivalent model-token price in USD for the recorded model(s), with the complete rate snapshot, official source, retrieval date, usage cutoff, per-model/tier/context-band breakdown, exclusions and assumptions. See the pricing rules below.
 - Unique screenshot files, all image references, model-visible image blocks, original frame IDs, recovered truncated references, and unresolved images.
 - Skill bundle/file/reference counts, manifest checksum, unresolved references, and explicit export-time provenance.
 - `agent_context`: available-at-start tool definitions (including non-MCP tools), separately observed tool use, and checksummed initial prompt assets with trajectory references. Missing initial inventory remains explicitly unknown. Use `--agent-context` for additional startup declarations and injected files; see [the context format and provenance rules](run-context.md).
@@ -65,4 +66,14 @@ python3 -B scripts/export-run.py --verify runs/GAME_ID/YYYYMMDD-RUN_ID
 pnpm test:export
 ```
 
-Verification checks the trajectory checksum and record count, image checksums and references, the skill manifest and file inventory, and initial prompt asset references and copies. Verification works without the original skill or asset files. New archives use schema version 2 in `run.json`; older version 1 archives, including those named `stats.json`, remain verifiable with their original coverage limits. Archives contain the complete recorded conversation and remain private local files under ignored `runs/`.
+Verification checks the trajectory checksum and record count, image checksums and references, the skill manifest and file inventory, and initial prompt asset references and copies. It also recomputes recorded token totals and prices from the trajectory and saved rates. Verification works without network access or the original skill or asset files. New archives use schema version 3 in `run.json`; older versions 1 and 2, including those named `stats.json`, remain verifiable with their original coverage limits. Archives contain the complete recorded conversation and remain private local files under ignored `runs/`.
+
+## Token pricing
+
+Every new export, including automatic finalization, saves `tokens.input_tokens`, `tokens.output_tokens`, `tokens.cached_input_tokens` and `api_cost.total_api_price_usd`. The price is a decimal string to preserve precision. Input includes cached input, and output includes reasoning; neither subset is billed twice. Pricing applies to each request separately, including long-context bands and model changes.
+
+The default lookup fetches [current official OpenAI API pricing](https://developers.openai.com/api/docs/pricing) at export time, using exact model IDs and published tier rates. It supports the flagship text-token tables and validates their units and context boundary. Recorded `priority` uses Fast pricing. Missing tiers use an explicitly disclosed Standard scenario; recorded tiers are never overridden. The scenario uses global processing with no regional premium. It represents API-equivalent token usage, not a Codex subscription bill, and excludes other chats/agents, separately billed tools and taxes. Cache-write costs require explicitly verified accounting and retention-specific rates; the automatic lookup leaves such costs unresolved.
+
+For a model or pricing table outside that lookup's coverage, supply `--pricing-rates /path/to/rates.json` to either `export-run.py` or `finalize-run.py queue`. Use the [Price Thread rate-file format](../.agents/skills/agentscumm_price-thread/references/pricing.md), exact observed models, official sources and rates verified on the export date. No model alias or different provider is substituted; the current usage reader supports OpenAI telemetry only.
+
+A lookup failure, unsupported model/tier, stale supplied rates or unresolved cache-write rate saves `api_cost.status: "unavailable"`, a reason and a null price while preserving the archive and measured tokens. A priced archive has `status: "priced"`. Finalization receipts also report pricing status and total, independently of archive completion. Missing pricing must remain visible as unknown, never zero. Existing archives are preserved and are not retroactively repriced. Verification uses the saved rates, so later price changes do not alter an archived result.

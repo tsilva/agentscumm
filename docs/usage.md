@@ -4,7 +4,7 @@ Run commands from the repository root. For installation and a first playthrough,
 
 ## Spectator setup
 
-On macOS, install Xcode Command Line Tools if needed (`xcode-select --install`). The first spectator launch compiles a small AppKit/WebKit app and converts `macos/AppIcon.png` into its Dock icon, without additional npm dependencies. Later launches reuse the built app. You can build it ahead of time with `pnpm build:macos`, which prints the `.app` path. Launch it through MCP so it receives the active spectator session; the bundle is not a standalone game launcher. The app also appears in Command-Tab. Its window title includes the app and running game, such as **AgentSCUMM - Flight of the Amazon Queen**. Closing its window or choosing **Quit AgentSCUMM** closes only the spectator; closing the MCP server terminates both the game and spectator. If the native build fails, the game remains available through MCP and `status` reports `viewerError`.
+On macOS, install Xcode Command Line Tools if needed (`xcode-select --install`). The first spectator launch compiles a small AppKit/WebKit app and converts `macos/AppIcon.png` into its Dock icon, without additional npm dependencies. Later launches reuse the built app. You can build it ahead of time with `pnpm build:macos`, which prints the `.app` path. Launch it through MCP so it receives the active spectator session; the bundle is not a standalone game launcher. The app also appears in Command-Tab. Its window title includes the app, running game and instance, such as **AgentSCUMM - Flight of the Amazon Queen [agent-a]**. Closing its window or choosing **Quit AgentSCUMM** closes only the spectator; closing the MCP server terminates both the game and spectator. If the native build fails, the game remains available through MCP and `status` reports `viewerError`.
 
 To register without automatically opening a window:
 
@@ -13,6 +13,28 @@ codex mcp add agentscumm -- node "$PWD/src/index.js" --no-viewer
 ```
 
 `node src/index.js` runs the stdio server directly. Its stdout is reserved for MCP protocol messages. It does not launch a game until a client calls `session` with `operation: "start"`.
+
+## Parallel instances
+
+Give each agent a separate stdio MCP server process. With no storage options, each process automatically gets a unique instance ID and persistent data directory at `.agentscumm/instances/<instance-id>/`. Agents can play the same game or different games concurrently. Each instance has its own browser profile, saves/cache, action queue, request cache, frame history, loopback spectator endpoint and spectator window. Closing or restarting one server leaves the others running. Each process still owns one active game; sharing one MCP connection does not create independent games.
+
+For repeatable experiments and save recovery, configure each agent's MCP launcher with a distinct name:
+
+```sh
+# Agent A's MCP server command
+node src/index.js --instance agent-a
+
+# Agent B's MCP server command, in a separate client process
+node src/index.js --instance agent-b
+```
+
+Names contain 1–64 lowercase letters, digits, hyphens or underscores and must start with a letter or digit. Named profiles live at `.agentscumm/instances/<name>/`. Reusing the same name after the server exits preserves its saves/cache; use `session(operation="start", mode="continue")` to request game-supported recovery. A restart without `--instance` or `--data-dir` creates a fresh profile. To reuse an automatically allocated profile, supply its full `status.instanceId` as `--instance` on the next launch.
+
+`status` reports `instanceId`, `instanceLabel`, `serverPid` and the absolute `dataDir`, including before a game starts. Spectator titles show the instance name or a short generated label so simultaneous runs of the same game can be distinguished. Session IDs and action request caches remain specific to their owning server. Use each agent's own MCP connection for every call.
+
+An explicit `--data-dir PATH` continues to use exactly that directory. It is mutually exclusive with `--instance`. For saves created by earlier AgentSCUMM versions in the original shared default directory, launch with `--data-dir .agentscumm`. The local Play Game client already passes a run-specific `--data-dir`; use a different run directory for each concurrent agent. Never copy or delete an in-use profile.
+
+An ownership guard rejects a second game launch against a live instance's data directory and reports an explicit error without closing the owner. The guard lasts until server shutdown, including while its game session is closed. Dead-process ownership records are reclaimed on the next launch. Chromium's own profile locks are also preserved. Use distinct names or directories for concurrent servers, including servers running older versions that lack the guard.
 
 ## Tools
 
@@ -126,7 +148,7 @@ After startup, the server checks health before and after input steps, during bac
 
 Recovery is explicit: inspect the error, then use `session` with `operation: "start"`, `restart: true` and the desired mode, or close and relaunch. The server does not replay failed input or automatically reload a failed game, because that could discard unsaved progress. Startup readiness confirms rendered content; observe again after a save restore to verify the intended scene and inventory.
 
-The owned browser profile, game saves/cache, and JSONL action logs live in ignored `.agentscumm/` next to this repository by default. Cached macOS app bundles live in repository-local `.agentscumm/macos/`, keyed by their source, app icon, and architecture. The browser uses no personal browsing profile. Only one running server should use a given data directory; give parallel servers distinct `--data-dir` values. Do not remove an in-use profile.
+The owned browser profile, game saves/cache, and JSONL action logs live in an isolated directory under ignored repository-local `.agentscumm/instances/` by default. Use a named instance or explicit data directory to recover saves across server restarts; see [parallel instances](#parallel-instances). Cached macOS app bundles live in repository-local `.agentscumm/macos/`, keyed by their source, app icon, and architecture, and can be reused by multiple spectator processes. The browser uses no personal browsing profile. Do not remove an in-use profile.
 
 An unexpected game-document replacement or browser/page closure blocks further input. Use `session(operation="close")` and relaunch explicitly; `mode: "continue"` requests ScummWEB's supported save recovery. There is no automatic restart, arbitrary rewind, or MCP save/load API in this version. Closing the MCP client terminates its owned game and viewer processes while leaving persistent browser data intact. Browser/process failure can lose progress since the last game save. Host sleep also stops useful capture.
 
@@ -137,6 +159,7 @@ CLI options:
 | `--width`, `--height` | `960`, `720`; integers from 320 to 1920, fixed for the server lifetime |
 | `--fps` | `10`; 1–15 |
 | `--buffer-seconds` | `60`; 1–300, still subject to the byte limit |
-| `--data-dir` | Repository-local `.agentscumm/` |
+| `--instance` | Omitted: generate an isolated instance; a name selects persistent `.agentscumm/instances/<name>/` storage |
+| `--data-dir` | Omitted: use `.agentscumm/instances/<generated-id>/`; an explicit path is used exactly, and cannot be combined with `--instance` |
 | `--base-url` | `https://scummweb.tsilva.eu`; override for a compatible development instance |
 | `--no-viewer` | Disable automatic spectator-window opening; its read-only URL remains available |

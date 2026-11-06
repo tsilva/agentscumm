@@ -73,7 +73,7 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
 
   const viewerUrl = await runtime.viewer.open({ headless: true });
   await runtime.viewer.page.locator('#screen').waitFor({ state: 'visible' });
-  await runtime.viewer.page.waitForFunction(() => document.title === 'AgentSCUMM - Flight of the Amazon Queen');
+  await runtime.viewer.page.waitForFunction(label => document.title === `AgentSCUMM - Flight of the Amazon Queen [${label}]`, runtime.instanceLabel);
   await runtime.viewer.page.waitForFunction(() => {
     const screen = document.getElementById('screen');
     return screen.width === 400 && screen.height === 300;
@@ -168,7 +168,10 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   assert.equal((await runtime.waitReady(15000)).phase, 'ready');
   const pending = runtime.act({ session_id: runtime.sessionId, request_id: 'shutdown-wait',
     actions: [{ type: 'wait', milliseconds: 10000 }] });
-  await sleep(100);
+  for (let attempt = 0; attempt < 200 && !runtime.actions.some(action =>
+    action.requestId === 'shutdown-wait' && action.steps.some(step => step.type === 'wait')); attempt++) await sleep(10);
+  assert.ok(runtime.actions.some(action => action.requestId === 'shutdown-wait' &&
+    action.steps.some(step => step.type === 'wait')), 'Wait for the input wait to start before testing its interruption');
   const shutdownStarted = Date.now();
   await runtime.close();
   assert.equal((await pending).action.state, 'failed');

@@ -9,12 +9,12 @@ import { imageContent } from './history.js';
 
 const { values } = parseArgs({ options: {
   'no-viewer': { type: 'boolean', default: false },
-  'base-url': { type: 'string' }, 'data-dir': { type: 'string' },
+  'base-url': { type: 'string' }, 'data-dir': { type: 'string' }, instance: { type: 'string' },
   width: { type: 'string' }, height: { type: 'string' }, fps: { type: 'string' },
   'buffer-seconds': { type: 'string' },
 } });
 const runtime = new GameRuntime({ viewer: !values['no-viewer'], baseUrl: values['base-url'],
-  dataDir: values['data-dir'], width: values.width ? Number(values.width) : undefined,
+  dataDir: values['data-dir'], instance: values.instance, width: values.width ? Number(values.width) : undefined,
   height: values.height ? Number(values.height) : undefined, fps: values.fps ? Number(values.fps) : undefined,
   bufferSeconds: values['buffer-seconds'] ? Number(values['buffer-seconds']) : undefined });
 
@@ -22,7 +22,8 @@ const server = new McpServer({ name: 'agentscumm', version: '0.1.0' }, {
   instructions: 'Start a ScummWEB game with session(operation="start"), poll status(wait_ms=10000) until phase=ready, then observe and act. '
     + 'Ready screenshots show only the game; dimensions can change with menus. Coordinates are screenshot-relative CSS pixels. Supply session_id and a unique request_id for each action sequence; '
     + 'reuse the same request_id only to retrieve the identical request result after an uncertain response. '
-    + 'Input delivery is not proof of puzzle success. Use observe(source="history") for missed events. The spectator is read-only.',
+    + 'Input delivery is not proof of puzzle success. Use observe(source="history") for missed events. The spectator is read-only. '
+    + 'Each server owns one game. Separate server processes run independently in parallel; status identifies this instance and its data directory.',
 });
 
 const text = value => ({ type: 'text', text: JSON.stringify(value) });

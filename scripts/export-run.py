@@ -28,6 +28,9 @@ SPEC.loader.exec_module(USAGE)
 CONTEXT_SPEC = importlib.util.spec_from_file_location("agentscumm_run_context", ROOT / "scripts/run_context.py")
 CONTEXT = importlib.util.module_from_spec(CONTEXT_SPEC)
 CONTEXT_SPEC.loader.exec_module(CONTEXT)
+PRICING_SPEC = importlib.util.spec_from_file_location("agentscumm_run_pricing", ROOT / "scripts/run_pricing.py")
+PRICING = importlib.util.module_from_spec(PRICING_SPEC)
+PRICING_SPEC.loader.exec_module(PRICING)
 MIMES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
 DATA_URL = re.compile(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.*)$", re.DOTALL)
 TRUNCATED = re.compile(r"^(.*?)…([0-9]+) chars truncated…(.*?)$", re.DOTALL)
@@ -614,7 +617,8 @@ class Screenshots:
 
 
 def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress",
-               completion_note=None, walkthroughs=(), skills=(), agent_context=None, estimated_progress=None):
+               completion_note=None, walkthroughs=(), skills=(), agent_context=None, estimated_progress=None,
+               pricing_rates=None):
     require(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", game_id), "Invalid game ID")
     require(status in ("in_progress", "completed", "stopped", "blocked"), "Invalid run status")
     validate_progress(estimated_progress)
@@ -712,7 +716,7 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                   "uncached_input_plus_output_tokens": totals["input_tokens"] - totals["cached_input_tokens"] + totals["output_tokens"],
                   "request_count": len(usage["requests"]), "usage_as_of": usage["usage_as_of"],
                   "coverage": usage["coverage"], "by_model_and_effort": usage["groups"]}
-        stats = {"schema_version": 2, "game_id": game_id, "run_id": run_id,
+        stats = {"schema_version": 3, "game_id": game_id, "run_id": run_id,
             "thread_id": thread_id, "status": status, "completion_note": completion_note,
             "estimated_progress_percent": 100 if status == "completed" else estimated_progress,
             "exported_at": datetime.now(timezone.utc).isoformat(),
@@ -724,7 +728,8 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                     "exporter": exporter_git(repo)},
             "models": sorted({r["model"] for r in usage["requests"]}),
             "reasoning_levels": sorted({r.get("effort") for r in usage["requests"] if r.get("effort")}),
-            "tokens": tokens, "sessions": sorted(sessions),
+            "tokens": tokens, "api_cost": PRICING.collect(USAGE, usage, pricing_rates),
+            "sessions": sorted(sessions),
             "screenshots": {"unique_files": len(screenshots.entries),
                 "references_in_trajectory": screenshots.references, "model_visible_blocks": model_images,
                 "original_frame_ids": len(screenshots.frame_map),
@@ -781,9 +786,11 @@ def verify_run(directory):
         metadata = directory / "stats.json"
     require(not metadata.is_symlink(), "Linked run metadata")
     stats = json.loads(metadata.read_text())
-    require(stats.get("schema_version") in (1, 2), "Unsupported run metadata schema")
-    if stats["schema_version"] == 2:
+    require(stats.get("schema_version") in (1, 2, 3), "Unsupported run metadata schema")
+    if stats["schema_version"] >= 2:
         require("agent_context" in stats and "skills" in stats, "Missing version 2 run metadata")
+    if stats["schema_version"] >= 3:
+        require("api_cost" in stats, "Missing version 3 pricing metadata")
     if "estimated_progress_percent" in stats:
         validate_progress(stats["estimated_progress_percent"])
         require(stats["status"] != "completed" or stats["estimated_progress_percent"] in (None, 100),
@@ -844,6 +851,23 @@ def verify_run(directory):
         verify_skills(directory, stats["skills"])
     if "agent_context" in stats:
         CONTEXT.verify(directory, stats["agent_context"])
+    if "api_cost" in stats:
+        measured = USAGE.snapshot(trajectory, stats["thread_id"])
+        require(all(stats["tokens"].get(key) == value for key, value in measured["totals"].items())
+                and stats["tokens"]["by_model_and_effort"] == measured["groups"]
+                and stats["tokens"]["request_count"] == len(measured["requests"])
+                and stats["tokens"]["usage_as_of"] == measured["usage_as_of"],
+                "Archived token usage does not match trajectory")
+        cost = stats["api_cost"]
+        require(cost.get("provider") == measured["provider"] and cost.get("usage_as_of") == measured["usage_as_of"],
+                "Pricing provider or usage cutoff mismatch")
+        if cost.get("status") == "priced":
+            require(cost == PRICING.calculate(USAGE, measured, cost["rates"]),
+                    "Archived API price does not match telemetry and rates")
+        else:
+            require(cost.get("status") == "unavailable" and cost.get("total_api_price_usd") is None
+                    and isinstance(cost.get("reason"), str) and cost["reason"],
+                    "Invalid unavailable pricing metadata")
     return stats
 
 
@@ -917,6 +941,8 @@ def main():
                         help="Additional SKILL.md to bundle (repeatable); resolves unavailable named references")
     parser.add_argument("--agent-context", type=Path,
                         help="JSON declaration of initial tool availability and additional injected prompt assets")
+    parser.add_argument("--pricing-rates", type=Path,
+                        help="Official rates JSON verified today; defaults to a fresh public pricing lookup")
     args = parser.parse_args()
     try:
         if args.verify:
@@ -927,8 +953,11 @@ def main():
             require(args.rollout and args.game_id, "Provide --rollout and --game-id")
             destination, stats = export_run(args.rollout, args.game_id, run_id=args.run_id,
                 status=args.status, completion_note=args.completion_note, walkthroughs=args.walkthrough_url,
-                skills=args.skill, agent_context=args.agent_context, estimated_progress=args.estimated_progress)
+                skills=args.skill, agent_context=args.agent_context, estimated_progress=args.estimated_progress,
+                pricing_rates=args.pricing_rates)
             print(dump({"path": str(destination), "status": stats["status"], "tokens": stats["tokens"]["total_tokens"],
+                        "api_cost_status": stats["api_cost"]["status"],
+                        "total_api_price_usd": stats["api_cost"]["total_api_price_usd"],
                         "screenshots": stats["screenshots"]["unique_files"], "verified": True}))
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"Export failed: {error}\n")

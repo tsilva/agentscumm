@@ -23,12 +23,17 @@ SPEC = importlib.util.spec_from_file_location("agentscumm_export", ROOT / "scrip
 EXPORT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(EXPORT)
 require = EXPORT.require
-BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Total actions | Action sequences |"
-BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |"
+LEGACY_BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Total actions | Action sequences |"
+LEGACY_BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |"
+BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Input tokens | Output tokens | Cached input tokens | Total API price (USD) | Total actions | Action sequences |"
+BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
 BENCHMARK_NOTES = ("✅ means completed; unfinished runs show estimated progress, or Unknown if none was recorded. "
                    "Time is elapsed conversation time (HH:MM:SS), including pauses and resumes, or elapsed so far for unfinished runs. "
                    "Tokens include cached/repeated input plus output; actions count submitted inputs, including waits. "
                    "Missing walkthrough declarations mean unspecified assistance, not unaided play.\n")
+BENCHMARK_PRICING_NOTES = ("Input tokens include cached input; output includes reasoning. "
+                           "API price is API-equivalent model-token cost in USD, excluding separately billed tools and taxes. "
+                           "Standard assumed marks missing recorded processing tiers; Unknown means no verified archived price.\n")
 
 
 def private_directory(repo, directory):
@@ -99,6 +104,17 @@ def public_text(value):
     return html.escape(" ".join(str(value).split()), quote=False).replace("|", "\\|").replace("`", "&#96;")
 
 
+def benchmark_usage(stats):
+    cost = stats.get("api_cost") or {}
+    api_price = "Unknown"
+    if cost.get("status") == "priced":
+        api_price = "$" + format(EXPORT.USAGE.rate(cost["total_api_price_usd"]), ",f")
+        if "Missing processing tiers priced as standard" in cost.get("assumptions", []):
+            api_price += " (Standard assumed)"
+    return [*(f"{stats['tokens'][key]:,}" if stats["tokens"].get(key) is not None else "Unknown"
+              for key in ("input_tokens", "output_tokens", "cached_input_tokens")), api_price]
+
+
 def benchmark_entry(stats, title=None):
     digest = stats["trajectory"]["sha256"]
     require(re.fullmatch(r"[0-9a-f]{64}", digest), "Invalid trajectory checksum")
@@ -114,11 +130,46 @@ def benchmark_entry(stats, title=None):
         "Yes" if stats["walkthrough_urls"] else "Unspecified",
         f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}",
         f"{stats['tokens']['total_tokens']:,}",
+        *benchmark_usage(stats),
         f"{stats.get('total_actions', sum(stats['actions'].values())):,}",
         f"{stats.get('total_action_sequences', stats['action_sequences']['count']):,}",
     ]
     # Keep the deduplication marker inside the row so Markdown renders one table.
     return "| " + " | ".join(public_text(value) for value in cells) + f" <!-- agentscumm:benchmark:{digest} --> |\n"
+
+
+def upgrade_benchmark_table(text, stats=None):
+    """Upgrade the previous table without inventing missing archive measurements."""
+    lines = text.splitlines(keepends=True)
+    headers = [i for i, line in enumerate(lines) if line.strip() in (LEGACY_BENCHMARK_HEADER, BENCHMARK_HEADER)]
+    require(len(headers) <= 1, "Multiple benchmark comparison tables; resolve before registration")
+    if headers and lines[headers[0]].strip() == LEGACY_BENCHMARK_HEADER:
+        position = headers[0]
+        require(position + 1 < len(lines) and lines[position + 1].strip() == LEGACY_BENCHMARK_SEPARATOR,
+                "Invalid legacy benchmark comparison table separator")
+        lines[position:position + 2] = [BENCHMARK_HEADER + "\n", BENCHMARK_SEPARATOR + "\n"]
+        position += 2
+        while position < len(lines) and lines[position].lstrip().startswith("|"):
+            cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", lines[position].strip())[1:-1]]
+            require(len(cells) == 9, "Invalid legacy benchmark row")
+            matching = stats is not None and f"<!-- agentscumm:benchmark:{stats['trajectory']['sha256']} -->" in lines[position]
+            cells[7:7] = benchmark_usage(stats) if matching else ["Unknown"] * 4
+            lines[position] = "| " + " | ".join(cells) + " |\n"
+            position += 1
+    if stats is not None:
+        marker = f"<!-- agentscumm:benchmark:{stats['trajectory']['sha256']} -->"
+        matching = [i for i, line in enumerate(lines) if marker in line]
+        require(len(matching) <= 1, "Duplicate benchmark identity; resolve before registration")
+        if matching:
+            position = matching[0]
+            cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", lines[position].strip())[1:-1]]
+            require(len(cells) == 13, "Invalid benchmark row")
+            cells[7:11] = benchmark_usage(stats)
+            lines[position] = "| " + " | ".join(cells) + " |\n"
+    text = "".join(lines)
+    if BENCHMARK_PRICING_NOTES.strip() not in text:
+        text = text.rstrip() + "\n\n" + BENCHMARK_PRICING_NOTES
+    return text
 
 
 def register_benchmark(archive, *, repo=ROOT, title=None):
@@ -146,28 +197,30 @@ def register_benchmark(archive, *, repo=ROOT, title=None):
         require(not target.is_symlink(), "Linked benchmark file")
         original = target.read_bytes() if target.exists() else None
         text = original.decode() if original is not None else "# Benchmarks\n\n" + BENCHMARK_NOTES
+        text = upgrade_benchmark_table(text, stats)
         marker = f"<!-- agentscumm:benchmark:{stats['trajectory']['sha256']} -->"
-        if marker in text:
-            return False
-        entry = benchmark_entry(stats, title)
-        lines = text.splitlines(keepends=True)
-        headers = [i for i, line in enumerate(lines) if line.strip() == BENCHMARK_HEADER]
-        require(len(headers) <= 1, "Multiple benchmark comparison tables; resolve before registration")
-        if headers:
-            position = headers[0] + 1
-            require(position < len(lines) and lines[position].strip() == BENCHMARK_SEPARATOR,
-                    "Invalid benchmark comparison table separator")
-            position += 1
-            while position < len(lines) and lines[position].lstrip().startswith("|"):
+        added = marker not in text
+        if added:
+            entry = benchmark_entry(stats, title)
+            lines = text.splitlines(keepends=True)
+            headers = [i for i, line in enumerate(lines) if line.strip() == BENCHMARK_HEADER]
+            if headers:
+                position = headers[0] + 1
+                require(position < len(lines) and lines[position].strip() == BENCHMARK_SEPARATOR,
+                        "Invalid benchmark comparison table separator")
                 position += 1
-            if position and not lines[position - 1].endswith("\n"):
-                lines[position - 1] += "\n"
-            lines.insert(position, entry)
-            text = "".join(lines)
-        else:
-            table = BENCHMARK_HEADER + "\n" + BENCHMARK_SEPARATOR + "\n" + entry + "\n"
-            anchor = "## Adding results"
-            text = text.replace(anchor, table + anchor, 1) if anchor in text else text.rstrip() + "\n\n" + table
+                while position < len(lines) and lines[position].lstrip().startswith("|"):
+                    position += 1
+                if position and not lines[position - 1].endswith("\n"):
+                    lines[position - 1] += "\n"
+                lines.insert(position, entry)
+                text = "".join(lines)
+            else:
+                table = BENCHMARK_HEADER + "\n" + BENCHMARK_SEPARATOR + "\n" + entry + "\n"
+                anchor = "## Adding results"
+                text = text.replace(anchor, table + anchor, 1) if anchor in text else text.rstrip() + "\n\n" + table
+        if original is not None and text.encode() == original:
+            return False
         require((target.read_bytes() if target.exists() else None) == original, "Benchmark file changed during registration; retry")
         fd, scratch = tempfile.mkstemp(prefix=".benchmark-", dir=private)
         try:
@@ -179,7 +232,7 @@ def register_benchmark(archive, *, repo=ROOT, title=None):
         finally:
             if Path(scratch).exists():
                 Path(scratch).unlink()
-        return True
+        return added
     finally:
         lock.unlink()
 
@@ -224,11 +277,13 @@ def finalize(request):
                 archive, stats = EXPORT.export_run(source, request["game_id"], repo=repo, run_id=run_id,
                     status="completed", completion_note=request["completion_note"],
                     walkthroughs=request.get("walkthrough_urls", []), skills=request.get("skills", []),
-                    agent_context=request.get("agent_context"))
+                    agent_context=request.get("agent_context"), pricing_rates=request.get("pricing_rates"))
         state.update(status="registering_benchmark", archive=str(archive))
         atomic_json(state_file, state)
         added = register_benchmark(archive, repo=repo, title=request.get("game_title"))
-        state.update(status="completed", benchmark_added=added, verified=True)
+        state.update(status="completed", benchmark_added=added, verified=True,
+                     api_cost_status=stats.get("api_cost", {}).get("status", "unavailable"),
+                     total_api_price_usd=stats.get("api_cost", {}).get("total_api_price_usd"))
         atomic_json(state_file, state)
         return state
     except Exception as error:
@@ -277,6 +332,7 @@ def main():
     start.add_argument("--timeout-seconds", type=float, default=300)
     start.add_argument("--walkthrough-url", action="append", default=[])
     start.add_argument("--skill", type=Path, action="append", default=[])
+    start.add_argument("--pricing-rates", type=Path, help="Official rates JSON verified on the export date")
     worker = commands.add_parser("worker", help="Run or retry a stored finalization request")
     worker.add_argument("--request", type=Path, required=True)
     register = commands.add_parser("register", help="Register an already verified archive without exporting again")
@@ -291,6 +347,7 @@ def main():
                 "turn_id": args.turn_id, "game_id": args.game_id, "game_title": args.game_title, "run_id": args.run_id,
                 "completion_note": args.completion_note, "timeout_seconds": args.timeout_seconds,
                 "agent_context": str(args.agent_context.absolute()) if args.agent_context else None,
+                "pricing_rates": str(args.pricing_rates.absolute()) if args.pricing_rates else None,
                 "walkthrough_urls": args.walkthrough_url,
                 "skills": [str(path.absolute()) for path in args.skill] + [str(ROOT / ".agents/skills/agentscumm_play-game/SKILL.md")]})
         elif args.command == "worker":

@@ -1,6 +1,7 @@
 """Synthetic end-to-end checks for portable conversation exports."""
 
 import base64
+from datetime import datetime, timezone
 import importlib.util
 import json
 from pathlib import Path
@@ -21,6 +22,18 @@ SESSION = "22222222-2222-4222-8222-222222222222"
 
 def record(kind, payload, second=0):
     return {"timestamp": f"2026-11-05T12:00:{second:02d}Z", "type": kind, "payload": payload}
+
+
+def rates_fixture():
+    return {"retrieved_on": datetime.now(timezone.utc).date().isoformat(),
+            "sources": ["https://developers.openai.com/api/docs/pricing"],
+            "models": {model: {tier: {"bands": [
+                {"max_input_tokens": 272000, "input": str(multiplier * 2),
+                 "cached_input": str(multiplier * 0.1), "output": str(multiplier * 10)},
+                {"max_input_tokens": None, "input": str(multiplier * 4),
+                 "cached_input": str(multiplier * 0.2), "output": str(multiplier * 15)}]}
+                for tier, multiplier in (("standard", 1), ("priority", 2))}
+                for model in ("test-model", "comparison-model")}}
 
 
 def fixture(complete=False):
@@ -66,6 +79,9 @@ class ExportTests(unittest.TestCase):
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True, capture_output=True)
         (self.repo / ".gitignore").write_text("/runs/\n")
         self.rollout = self.repo / "source.jsonl"
+        lookup = patch.object(EXPORT.PRICING, "fetch_rates", return_value=rates_fixture())
+        lookup.start()
+        self.addCleanup(lookup.stop)
 
     def source(self, rows=None, trailing=b""):
         self.rows = fixture() if rows is None else rows
@@ -386,7 +402,7 @@ class ExportTests(unittest.TestCase):
             self.export(agent_context=declaration)
         self.assertFalse(list((self.repo / "runs/synthetic-game").iterdir()))
         path, stats = self.export()
-        self.assertEqual(stats["schema_version"], 2)
+        self.assertEqual(stats["schema_version"], 3)
         self.assertTrue((path / "run.json").is_file())
         self.assertFalse((path / "stats.json").exists())
         (path / "run.json").unlink()
