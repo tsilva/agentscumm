@@ -13,9 +13,21 @@ Treat the attached AgentSCUMM MCP tools as the complete gameplay interface. Use 
 
 Resolve the AgentSCUMM repository from this skill's real path for run storage. Read the attached MCP tool schemas and use `list_games` to map game names to catalog slugs; ask only if the requested game is genuinely ambiguous or unavailable. Use that slug as `game-id`. If the MCP tools are unavailable, report that blocker; do not start a replacement client or access the game through another interface.
 
+### Commit before play
+
+Before starting or resuming play, run `git status --porcelain=v1 --untracked-files=all` in the owning AgentSCUMM checkout. Any staged, unstaged, or untracked change blocks play. Show the affected paths, ask the user to commit all changes, and wait. Do not create the run directory, launch or resume a game, or send gameplay inputs while this gate is blocked. Do not commit on the user's behalf, stash, discard, or hide changes to satisfy the gate. Ignored run data remains ignored and must not be committed.
+
+After the user has committed, rerun the status check; their confirmation alone is not proof of a clean checkout. Require an existing commit and capture its full hash with `git rev-parse --verify HEAD`, plus the branch name or `null` for detached HEAD. If the checkout is already clean and has a commit, proceed without asking for another commit or approval.
+
+### Initialize the run immediately
+
 Keep the run's notes, screenshots, retrieved references, traces, and other working data under the repository's `.internal/<game-id>/<run-id>/`. The user explicitly selected this layout. Choose a unique timestamp-and-suffix run ID; reuse the directory when resuming that run. Before writing, confirm `/.internal/` is in the root `.gitignore`, `git check-ignore` excludes the run, and `git ls-files -- .internal` is empty. Reject linked run directories and preserve existing runs. Never commit run data.
 
-Create a free-form `memory.md` in the run directory. Organize and revise it however useful; no room schema, visit-count policy, or fixed memory template is required. On resume, read that memory and inspect relevant saved screenshots before acting. Earlier runs for the same game can provide useful knowledge, but verify their progress claims against the actual game.
+Immediately after the clean-commit gate and storage checks pass, create the new run directory and write its initial `run.json` before startup-context capture, further research, or any game interaction. Record `schema_version: 1`, `kind: "working_run"`, `status: "in_progress"`, `game_id`, `run_id`, an ISO 8601 `started_at` timestamp, and `git.play_start` containing the verified full `commit_id`, `branch`, `dirty: false`, and `source: "clean_play_preflight"`. Read the file back and confirm that its commit still matches `HEAD` and the checkout remains clean before proceeding. If either changed, stop and repeat the gate rather than silently replacing the recorded baseline. This working manifest is separate from the exporter's verified archive manifest.
+
+On resume, apply the same clean-commit gate, preserve the original `git.play_start` and `started_at`, and append the current timestamp and verified clean revision to `git.resume_checkpoints` before further game interaction. Do not rewrite an earlier run's starting commit to today's `HEAD`. For a historical run without a starting record, keep `git.play_start` explicitly unknown (`null`); record only the current resume checkpoint. The local checkout revision is not proof of the attached server's startup revision: retain server-reported provenance separately and never relabel it as this preflight commit.
+
+Create a free-form `memory.md` alongside the manifest immediately. Organize and revise it however useful; no room schema, visit-count policy, or fixed memory template is required. On resume, read that memory and inspect relevant saved screenshots before acting. Earlier runs for the same game can provide useful knowledge, but verify their progress claims against the actual game.
 
 Read [references/run-archiving.md](references/run-archiving.md) and capture the exposed startup tool inventory and any additional injected prompt assets before gameplay. Keep `initial-context.json` and immutable supplied assets in the run directory. Preserve this capture on resume; missing historical startup context stays unknown. Check existing finalization state before queueing another job.
 

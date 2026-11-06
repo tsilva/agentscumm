@@ -441,6 +441,21 @@ class ExportTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, field + " count mismatch"):
                         EXPORT.verify_run(path)
 
+    def test_progress_estimates_are_bounded_and_completed_runs_record_100_percent(self):
+        self.source(fixture(complete=True))
+        for invalid in (-1, 101, float("nan"), float("inf"), True, "40"):
+            with self.subTest(estimated_progress=invalid):
+                with self.assertRaisesRegex(ValueError, "Estimated progress"):
+                    self.export(estimated_progress=invalid)
+        with self.assertRaisesRegex(ValueError, "100 percent"):
+            self.export(status="completed", completion_note="Ending observed", estimated_progress=40)
+        path, stats = self.export(status="completed", completion_note="Ending observed")
+        self.assertEqual(stats["estimated_progress_percent"], 100)
+        stats["estimated_progress_percent"] = 99
+        (path / "run.json").write_text(json.dumps(stats))
+        with self.assertRaisesRegex(ValueError, "100 percent"):
+            EXPORT.verify_run(path)
+
     def test_recorded_commit_is_preserved_separately_from_export_checkout(self):
         rows = fixture()
         rows[0]["payload"]["git"] = {"commit_hash": "a" * 40, "branch": "run-branch",

@@ -4,7 +4,9 @@ Read this when starting/resuming run records and again when the ending is confir
 
 ## Before gameplay
 
-Use the repository resolved from this skill's actual path and the existing ignored `.internal/<game-id>/<run-id>/` working directory. Capture `initial-context.json` before gameplay using the format in the repository's `docs/run-context.md`:
+First complete the skill's clean-commit gate and immediately initialize `.internal/<game-id>/<run-id>/run.json` with the verified starting commit. This must happen before capturing startup context or interacting with the game. Keep the working manifest's original starting revision on resume; later clean revisions belong in its resume checkpoints, and missing historical starting provenance stays unknown. The working manifest is not a verified export and does not substitute for recorded server-start revisions.
+
+Use that existing ignored working directory to capture `initial-context.json` before gameplay using the format in the repository's `docs/run-context.md`:
 
 - Record the tools exposed to this agent, including built-in shell, web/search, image/file tools, orchestration, and enabled MCP tools. The host's `ALL_TOOLS` metadata provides enabled nested tool names; supplement it with top-level tools from the attached schemas. Read metadata only, without calling unrelated services. Do not copy credentials or host configuration.
 - Use `schema_version: 1`, `tools.available_at_start` entries with `name` and `kind` (`builtin` or `mcp`), and `tools.inventory_complete: false` unless the host establishes that the inventory is complete. Preserve unknown coverage. Current capabilities do not reconstruct an earlier run's startup inventory.

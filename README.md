@@ -32,6 +32,8 @@ Open a new Codex chat in this repository with the MCP enabled, then ask:
 $agentscumm_play-game Flight of the Amazon Queen
 ```
 
+Commit all checkout changes before starting or resuming play. The skill stops on staged, unstaged, or untracked changes; once the checkout is clean, it immediately creates the working run folder with the verified commit recorded in `run.json`.
+
 The game loads, a read-only spectator opens, and Codex starts playing toward the ending. You can request a milestone, pause, or resume a saved run. Closing the spectator leaves the game running; closing the MCP server ends the active session. Recovery depends on saves made inside the game.
 
 The first macOS spectator launch builds its native app automatically. For setup alternatives, global skill installation, and troubleshooting, see [usage and controls](docs/usage.md).

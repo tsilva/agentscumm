@@ -3,6 +3,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -66,7 +67,7 @@ class FinalizationTests(unittest.TestCase):
         self.assertEqual(len(stats["agent_context"]["prompt_assets"]), 2)
         benchmark = (self.repo / "BENCHMARKS.md").read_text()
         self.assertIn("Synthetic Adventure", benchmark)
-        self.assertIn("Walkthrough-assisted", benchmark)
+        self.assertIn("| Yes |", benchmark)
         self.assertIn("test-model / high", benchmark)
         self.assertNotIn("/Users/operator", benchmark)
         self.assertNotIn(THREAD, benchmark)
@@ -173,13 +174,71 @@ class FinalizationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "different finalization request"):
             FINAL.queue({**self.request, "completion_note": "Different ending evidence"})
 
-    def test_unfinished_archive_cannot_be_registered_and_missing_guide_is_not_unaided(self):
+    def test_unfinished_archive_registers_unknown_progress_without_claiming_unaided_play(self):
         self.source(fixture())
         archive, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo)
-        with self.assertRaisesRegex(ValueError, "Only verified completed"):
-            FINAL.register_benchmark(archive, repo=self.repo)
+        self.assertTrue(FINAL.register_benchmark(archive, repo=self.repo))
+        self.assertTrue(FINAL.benchmark_entry(stats).startswith("| Unknown |"))
         self.assertIn("Unspecified", FINAL.benchmark_entry(stats))
         self.assertNotIn("Unaided", FINAL.benchmark_entry(stats))
+
+    def test_unfinished_progress_is_recorded_and_shown_as_an_estimate(self):
+        self.source(fixture())
+        archive, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo,
+            status="stopped", estimated_progress=42.5)
+        self.assertEqual(stats["estimated_progress_percent"], 42.5)
+        self.assertEqual(FINAL.EXPORT.verify_run(archive)["estimated_progress_percent"], 42.5)
+        self.assertTrue(FINAL.register_benchmark(archive, repo=self.repo))
+        self.assertIn("| ~42.5% |", (self.repo / "BENCHMARKS.md").read_text())
+        for status in ("in_progress", "blocked", "stopped"):
+            stats["status"] = status
+            self.assertTrue(FINAL.benchmark_entry(stats).startswith("| ~42.5% |"))
+
+    def test_comparison_table_appends_runs_as_contiguous_rows_and_preserves_notes(self):
+        self.source(fixture(complete=True))
+        first = FINAL.finalize(self.request)
+        path = self.repo / "BENCHMARKS.md"
+        path.write_text(path.read_text() + "\nEditorial note retained.\n")
+        rows = fixture(complete=True)
+        rows[2]["payload"]["model"] = "comparison-model"
+        rows[6]["payload"]["item"]["arguments"]["actions"].append({"type": "wait", "milliseconds": 1})
+        self.source(rows)
+        second, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo,
+            run_id="second", status="completed", completion_note="Ending observed")
+        self.assertTrue(FINAL.register_benchmark(second, repo=self.repo, title="Synthetic Adventure"))
+        text = path.read_text()
+        lines = text.splitlines()
+        position = lines.index(FINAL.BENCHMARK_HEADER)
+        table = lines[position:position + 4]
+        self.assertEqual(text.count(FINAL.BENCHMARK_HEADER), 1)
+        self.assertTrue(all(line.startswith("|") for line in table))
+        parsed = [[cell.strip() for cell in re.sub(r"<!--.*?-->", "", line).split("|")[1:-1]] for line in table[2:]]
+        self.assertEqual(len(parsed), 2)
+        self.assertTrue(all(len(row) == 9 for row in parsed))
+        self.assertEqual(parsed[0][0], "✅")
+        self.assertEqual(parsed[0][3], "test-model / high")
+        self.assertEqual(parsed[1][3], "comparison-model / high")
+        self.assertEqual(parsed[0][7:], ["2", "1"])
+        self.assertEqual(parsed[1][7:], ["3", "1"])
+        self.assertEqual(parsed[1][6], f"{stats['tokens']['total_tokens']:,}")
+        self.assertEqual(parsed[1][4], "Unspecified")
+        self.assertIn("Editorial note retained.", text)
+        self.assertFalse(FINAL.register_benchmark(first["archive"], repo=self.repo))
+        self.assertFalse(FINAL.register_benchmark(second, repo=self.repo))
+        self.assertEqual(path.read_text(), text)
+
+    def test_comparison_date_is_utc_and_rendering_is_one_row(self):
+        self.source(fixture(complete=True))
+        archive, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo,
+            status="completed", completion_note="Ending observed")
+        stats["recorded_through"] = "2026-11-06T00:30:00+01:00"
+        row = FINAL.benchmark_entry(stats, "Synthetic Adventure")
+        parsed = [cell.strip() for cell in re.sub(r"<!--.*?-->", "", row).split("|")[1:-1]]
+        self.assertEqual(parsed[0], "✅")
+        self.assertEqual(parsed[2], "2026-11-05")
+        self.assertEqual(parsed[5], "00:00:07")
+        self.assertEqual(len(row.splitlines()), 1)
+        self.assertNotIn("Europe/", row)
 
 
 if __name__ == "__main__":

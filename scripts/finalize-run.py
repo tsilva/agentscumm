@@ -23,6 +23,12 @@ SPEC = importlib.util.spec_from_file_location("agentscumm_export", ROOT / "scrip
 EXPORT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(EXPORT)
 require = EXPORT.require
+BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Total actions | Action sequences |"
+BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |"
+BENCHMARK_NOTES = ("✅ means completed; unfinished runs show estimated progress, or Unknown if none was recorded. "
+                   "Time is elapsed conversation time (HH:MM:SS), including pauses and resumes, or elapsed so far for unfinished runs. "
+                   "Tokens include cached/repeated input plus output; actions count submitted inputs, including waits. "
+                   "Missing walkthrough declarations mean unspecified assistance, not unaided play.\n")
 
 
 def private_directory(repo, directory):
@@ -97,37 +103,22 @@ def benchmark_entry(stats, title=None):
     digest = stats["trajectory"]["sha256"]
     require(re.fullmatch(r"[0-9a-f]{64}", digest), "Invalid trajectory checksum")
     title = title or stats["game_id"].replace("-", " ").title()
-    started = EXPORT.USAGE.timestamp(stats["started_at"]).astimezone(ZoneInfo("Europe/Lisbon")).date()
+    completed = EXPORT.USAGE.timestamp(stats["recorded_through"]).astimezone(timezone.utc).date()
     seconds = round(stats["wall_clock_seconds"])
-    tools = stats.get("agent_context", {}).get("tools", {})
-    other = [t["name"] for t in tools.get("observed_during_run", []) if t["kind"] != "mcp"]
-    tokens = stats["tokens"]
-    metrics = [
-        ("Result", "Completed; ending evidence recorded in run manifest"),
-        ("Recorded model(s) / reasoning", ", ".join(stats["models"]) + " / " + (", ".join(stats["reasoning_levels"]) or "Unknown")),
-        ("Assistance", "Walkthrough-assisted (source URLs recorded)" if stats["walkthrough_urls"] else "Unspecified; no walkthrough URLs declared"),
-        ("Elapsed conversation time, including pauses", f"{seconds // 3600} h {seconds % 3600 // 60} min {seconds % 60} s"),
-        ("Model requests", f"{tokens['request_count']:,}"),
-        ("Submitted action sequences", f"{stats.get('total_action_sequences', stats['action_sequences']['count']):,}"),
-        ("Submitted inputs, including waits", f"{stats.get('total_actions', sum(stats['actions'].values())):,}"),
-        ("Uncached input tokens", f"{tokens['uncached_input_tokens']:,}"),
-        ("Cached input tokens", f"{tokens['cached_input_tokens']:,}"),
-        ("Output tokens", f"{tokens['output_tokens']:,}"),
-        ("Total input + output tokens", f"{tokens['total_tokens']:,}"),
-        ("Unique archived screenshots", f"{stats['screenshots']['unique_files']:,}"),
-        ("Initial tool inventory coverage", tools.get("coverage", "Unavailable")),
-        ("Other observed tools", ", ".join(other) or "Not recorded"),
-        ("Recorded/declared initial prompt assets", str(len(stats.get("agent_context", {}).get("prompt_assets", [])))),
-        ("Referenced skill bundles", str(stats.get("skills", {}).get("bundles", "Unknown"))),
-        ("AgentSCUMM startup revision", ", ".join(r.get("commit_id") or "Unknown" for r in stats["git"]["agentscumm_runtime"]) or "Not recorded"),
-        ("Trajectory SHA-256", digest),
+    progress = stats.get("estimated_progress_percent")
+    EXPORT.validate_progress(progress)
+    status = "✅" if stats["status"] == "completed" else f"~{progress:g}%" if progress is not None else "Unknown"
+    cells = [
+        status, title, completed.isoformat(),
+        ", ".join(stats["models"]) + " / " + (", ".join(stats["reasoning_levels"]) or "Unknown"),
+        "Yes" if stats["walkthrough_urls"] else "Unspecified",
+        f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}",
+        f"{stats['tokens']['total_tokens']:,}",
+        f"{stats.get('total_actions', sum(stats['actions'].values())):,}",
+        f"{stats.get('total_action_sequences', stats['action_sequences']['count']):,}",
     ]
-    rows = "\n".join(f"| {key} | {public_text(value)} |" for key, value in metrics)
-    return (f"<!-- agentscumm:benchmark:{digest} -->\n"
-            f"### {public_text(title)} — {started}\n\n| Measurement | Recorded result |\n| --- | --- |\n{rows}\n\n"
-            "Totals count submitted inputs and repeated model context, not only successful game actions. "
-            "Observed tools do not establish initial availability. Skill copies and declared external assets retain their manifest provenance; "
-            "unknown assistance or startup revisions remain unknown.\n")
+    # Keep the deduplication marker inside the row so Markdown renders one table.
+    return "| " + " | ".join(public_text(value) for value in cells) + f" <!-- agentscumm:benchmark:{digest} --> |\n"
 
 
 def register_benchmark(archive, *, repo=ROOT, title=None):
@@ -135,7 +126,8 @@ def register_benchmark(archive, *, repo=ROOT, title=None):
     require(archive.is_relative_to(repo / "runs"), "Benchmark archive must belong to this checkout")
     require(not any(path.is_symlink() for path in [archive, *archive.parents]), "Linked benchmark archive path")
     stats = EXPORT.verify_run(archive)
-    require(stats["status"] == "completed" and stats.get("completion_note"), "Only verified completed runs can be registered")
+    require(stats["status"] in ("completed", "in_progress", "stopped", "blocked"), "Invalid benchmark run status")
+    require(stats["status"] != "completed" or stats.get("completion_note"), "Completed benchmarks require ending evidence")
     private = private_directory(repo, repo / ".internal/benchmark-registration")
     lock = private / "update.lock"
     acquired = False
@@ -153,13 +145,29 @@ def register_benchmark(archive, *, repo=ROOT, title=None):
         target = repo / "BENCHMARKS.md"
         require(not target.is_symlink(), "Linked benchmark file")
         original = target.read_bytes() if target.exists() else None
-        text = original.decode() if original is not None else "# Benchmarks\n\n## Results\n\n## Adding results\n\nUse verified run manifests and retain assistance and provenance limits.\n"
+        text = original.decode() if original is not None else "# Benchmarks\n\n" + BENCHMARK_NOTES
         marker = f"<!-- agentscumm:benchmark:{stats['trajectory']['sha256']} -->"
         if marker in text:
             return False
         entry = benchmark_entry(stats, title)
-        anchor = "## Adding results"
-        text = text.replace(anchor, entry + "\n" + anchor, 1) if anchor in text else text.rstrip() + "\n\n" + entry
+        lines = text.splitlines(keepends=True)
+        headers = [i for i, line in enumerate(lines) if line.strip() == BENCHMARK_HEADER]
+        require(len(headers) <= 1, "Multiple benchmark comparison tables; resolve before registration")
+        if headers:
+            position = headers[0] + 1
+            require(position < len(lines) and lines[position].strip() == BENCHMARK_SEPARATOR,
+                    "Invalid benchmark comparison table separator")
+            position += 1
+            while position < len(lines) and lines[position].lstrip().startswith("|"):
+                position += 1
+            if position and not lines[position - 1].endswith("\n"):
+                lines[position - 1] += "\n"
+            lines.insert(position, entry)
+            text = "".join(lines)
+        else:
+            table = BENCHMARK_HEADER + "\n" + BENCHMARK_SEPARATOR + "\n" + entry + "\n"
+            anchor = "## Adding results"
+            text = text.replace(anchor, table + anchor, 1) if anchor in text else text.rstrip() + "\n\n" + table
         require((target.read_bytes() if target.exists() else None) == original, "Benchmark file changed during registration; retry")
         fd, scratch = tempfile.mkstemp(prefix=".benchmark-", dir=private)
         try:
@@ -271,7 +279,7 @@ def main():
     start.add_argument("--skill", type=Path, action="append", default=[])
     worker = commands.add_parser("worker", help="Run or retry a stored finalization request")
     worker.add_argument("--request", type=Path, required=True)
-    register = commands.add_parser("register", help="Register an already verified completed archive without exporting again")
+    register = commands.add_parser("register", help="Register an already verified archive without exporting again")
     register.add_argument("archive", type=Path)
     register.add_argument("--game-title")
     args = parser.parse_args()

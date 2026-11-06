@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -44,6 +45,11 @@ SKILL_EXCLUDES = {".git", ".venv", "venv", "node_modules", "__pycache__", ".DS_S
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def validate_progress(value):
+    require(value is None or type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 100,
+            "Estimated progress must be a finite percentage between 0 and 100")
 
 
 def dump(value):
@@ -606,9 +612,11 @@ class Screenshots:
 
 
 def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress",
-               completion_note=None, walkthroughs=(), skills=(), agent_context=None):
+               completion_note=None, walkthroughs=(), skills=(), agent_context=None, estimated_progress=None):
     require(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", game_id), "Invalid game ID")
     require(status in ("in_progress", "completed", "stopped", "blocked"), "Invalid run status")
+    validate_progress(estimated_progress)
+    require(status != "completed" or estimated_progress in (None, 100), "Completed runs require 100 percent progress")
     base = archive_root(repo)
     parent = safe_directory(base / game_id)
     staging = Path(tempfile.mkdtemp(prefix=".export-", dir=parent))
@@ -703,6 +711,7 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                   "coverage": usage["coverage"], "by_model_and_effort": usage["groups"]}
         stats = {"schema_version": 2, "game_id": game_id, "run_id": run_id,
             "thread_id": thread_id, "status": status, "completion_note": completion_note,
+            "estimated_progress_percent": 100 if status == "completed" else estimated_progress,
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "started_at": started.isoformat(), "recorded_through": end.isoformat(),
             "wall_clock_seconds": (end - started).total_seconds(),
@@ -772,6 +781,10 @@ def verify_run(directory):
     require(stats.get("schema_version") in (1, 2), "Unsupported run metadata schema")
     if stats["schema_version"] == 2:
         require("agent_context" in stats and "skills" in stats, "Missing version 2 run metadata")
+    if "estimated_progress_percent" in stats:
+        validate_progress(stats["estimated_progress_percent"])
+        require(stats["status"] != "completed" or stats["estimated_progress_percent"] in (None, 100),
+                "Completed runs require 100 percent progress")
     if "total_actions" in stats or "total_action_sequences" in stats:
         for key, expected in (("total_actions", sum(stats["actions"].values())),
                               ("total_action_sequences", stats["action_sequences"]["count"])):
@@ -895,6 +908,7 @@ def main():
     parser.add_argument("--run-id", help="Defaults to the source conversation UUID")
     parser.add_argument("--status", choices=("in_progress", "completed", "stopped", "blocked"), default="in_progress")
     parser.add_argument("--completion-note", help="Observed ending evidence; required with completed")
+    parser.add_argument("--estimated-progress", type=float, help="Declared estimated progress percentage for an unfinished run (0–100)")
     parser.add_argument("--walkthrough-url", action="append", default=[])
     parser.add_argument("--skill", type=Path, action="append", default=[],
                         help="Additional SKILL.md to bundle (repeatable); resolves unavailable named references")
@@ -910,7 +924,7 @@ def main():
             require(args.rollout and args.game_id, "Provide --rollout and --game-id")
             destination, stats = export_run(args.rollout, args.game_id, run_id=args.run_id,
                 status=args.status, completion_note=args.completion_note, walkthroughs=args.walkthrough_url,
-                skills=args.skill, agent_context=args.agent_context)
+                skills=args.skill, agent_context=args.agent_context, estimated_progress=args.estimated_progress)
             print(dump({"path": str(destination), "status": stats["status"], "tokens": stats["tokens"]["total_tokens"],
                         "screenshots": stats["screenshots"]["unique_files"], "verified": True}))
     except (ValueError, OSError, subprocess.CalledProcessError) as error:

@@ -4,6 +4,10 @@
 
 ## Recorded context
 
+Before starting or resuming gameplay, Play Game requires a clean AgentSCUMM checkout. Staged, unstaged, and untracked changes block play until the user commits them; ignored run data stays excluded. After verifying the full `HEAD` commit, the skill immediately initializes `.internal/<game-id>/<run-id>/run.json` before any gameplay or startup-context capture. This working manifest has `kind: "working_run"`, `status: "in_progress"`, game/run identifiers, `started_at`, and `git.play_start` with the full commit ID, branch, `dirty: false`, and `source: "clean_play_preflight"`.
+
+Resume checks preserve the original starting record and append timestamped clean revisions to `git.resume_checkpoints`. Missing historical starting commits remain unknown. This working manifest is separate from the verified manifest generated under `runs/`; it is not an archive accepted by the verifier. Its checkout revision does not establish which revision the attached MCP server loaded. Preserve server-reported startup provenance separately.
+
 `agent_context.tools.available_at_start` records tool definitions found in initial session/turn metadata or initial prompt schemas. This includes built-in tools such as web search and shell execution as well as MCP tools. Prose mentions of a tool do not establish availability. A recorded subset remains `partial`; absence of definitions is `unavailable`, not evidence that no tools existed.
 
 `agent_context.tools.observed_during_run` separately indexes direct recorded calls, MCP call events, and tool references in submitted `exec` code. The latter are labeled because conditional code might not execute. These entries are evidence of tool use or attempted use, not a reconstructed initial inventory or deduplicated invocation counts. Names such as `web__run` are normalized to `web.run`; `mcp__agentscumm__act` becomes `mcp.agentscumm.act`.
@@ -62,4 +66,6 @@ The bounded local worker waits for the specified gameplay turn's `task_complete`
 python3 -B scripts/finalize-run.py register /path/to/completed-archive
 ```
 
-Public entries contain aggregate measurements and capability/provenance coverage, not private completion-note text, original prompt contents, or conversation paths. No declared walkthrough URLs means assistance is unspecified, not automatically unaided. Older manually documented results can carry the same `<!-- agentscumm:benchmark:TRAJECTORY_SHA256 -->` marker to avoid duplicate registration.
+Public results use one compact comparison table with status, game, UTC date, model/reasoning, walkthrough assistance, elapsed completion time, total tokens, total submitted actions, and action sequences. Status is ✅ for a completed game; unfinished runs show their declared `estimated_progress_percent` (for example, `~40%`) or `Unknown` when no estimate was recorded. Estimates are supplied by the operator, never inferred from action or token counts. The UTC date comes from the archive's recorded cutoff; elapsed time includes pauses and resumes, or time so far for unfinished runs. Tokens are total input plus output, including cached/repeated context. Full capability/provenance details stay in `run.json`. No declared walkthrough URLs means assistance is unspecified, not automatically unaided.
+
+Registration appends a row to the existing table and preserves surrounding editorial notes. The `<!-- agentscumm:benchmark:TRAJECTORY_SHA256 -->` deduplication marker belongs inside the row so it does not break Markdown table rendering. Older manually documented results with the same marker are still recognized. Public rows omit private completion-note text, original prompt contents, and conversation paths.
