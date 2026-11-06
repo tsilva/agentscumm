@@ -7,11 +7,12 @@ func emit(_ payload: [String: Any]) {
     }
 }
 
-final class Spectator: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler {
+final class Spectator: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     var window: NSWindow!
     var webView: WKWebView!
     var titleObservation: NSKeyValueObservation?
     var lastGameSize: NSSize?
+    var footerHeight: Double = 24
     let viewerURL: URL
     let width: Double
     let height: Double
@@ -61,8 +62,8 @@ final class Spectator: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
             self?.window.title = view.title.flatMap { $0.isEmpty ? nil : $0 } ?? "AgentSCUMM"
         }
         window.isReleasedWhenClosed = false
-        window.contentAspectRatio = NSSize(width: width, height: height)
-        window.contentMinSize = NSSize(width: 320, height: 320 * height / width)
+        window.delegate = self
+        window.contentMinSize = NSSize(width: 320, height: 320 * height / width + footerHeight)
         window.backgroundColor = .black
         window.contentView = webView
         window.center()
@@ -86,26 +87,36 @@ final class Spectator: NSObject, NSApplicationDelegate, WKNavigationDelegate, WK
               let width = size["width"], let height = size["height"],
               width.isFinite, height.isFinite, (1...1920).contains(width), (1...1920).contains(height) else { return }
         let ratio = width / height
-        let previous = window.contentAspectRatio
-        if abs(previous.width / previous.height - ratio) >= 0.0001 {
-            window.contentAspectRatio = NSSize(width: width, height: height)
-            window.contentMinSize = NSSize(width: 320, height: 320 / ratio)
+        let gameSize = NSSize(width: width, height: height)
+        if lastGameSize != gameSize {
+            footerHeight = min(max(size["footerHeight"] ?? 24, 0), 100)
+            lastGameSize = gameSize
+            window.contentMinSize = NSSize(width: 320, height: 320 / ratio + footerHeight)
             let available = window.screen?.visibleFrame.size ?? NSSize(width: 1920, height: 1080)
             let titleHeight = window.frame.height - window.contentView!.bounds.height
-            let targetWidth = min(window.contentView!.bounds.width, available.width, (available.height - titleHeight) * ratio)
-            window.setContentSize(NSSize(width: targetWidth, height: targetWidth / ratio))
+            let targetWidth = min(window.contentView!.bounds.width, available.width, (available.height - titleHeight - footerHeight) * ratio)
+            window.setContentSize(NSSize(width: targetWidth, height: targetWidth / ratio + footerHeight))
             if let visible = window.screen?.visibleFrame {
                 let frame = window.frame
                 window.setFrameOrigin(NSPoint(x: min(max(frame.minX, visible.minX), visible.maxX - frame.width),
                                               y: min(max(frame.minY, visible.minY), visible.maxY - frame.height)))
             }
-        }
-        let gameSize = NSSize(width: width, height: height)
-        if lastGameSize != gameSize {
-            lastGameSize = gameSize
             emit(["event": "geometry", "gameWidth": width, "gameHeight": height,
-                  "contentWidth": webView.bounds.width, "contentHeight": webView.bounds.height])
+                  "contentWidth": webView.bounds.width, "contentHeight": webView.bounds.height, "footerHeight": footerHeight])
         }
+    }
+
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        guard let game = lastGameSize else { return frameSize }
+        let ratio = game.width / game.height
+        var content = sender.contentRect(forFrameRect: NSRect(origin: .zero, size: frameSize)).size
+        let current = webView.bounds.size
+        if abs(content.width - current.width) >= abs(content.height - current.height) * ratio {
+            content.height = content.width / ratio + footerHeight
+        } else {
+            content.width = max(1, content.height - footerHeight) * ratio
+        }
+        return sender.frameRect(forContentRect: NSRect(origin: .zero, size: content)).size
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,

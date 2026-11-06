@@ -10,7 +10,7 @@ import { FrameHistory } from './history.js';
 import { SerialQueue, validateSequence } from './actions.js';
 import { SpectatorViewer } from './viewer.js';
 import { installHealthObserver, readShellState, bounded } from './health.js';
-import { installDisplayObserver, displayBounds } from './display.js';
+import { installDisplayObserver, displayBounds, captureBounds } from './display.js';
 
 export const games = [
   ['beneath-a-steel-sky', 'sky', true],
@@ -59,6 +59,7 @@ export class GameRuntime {
     this.queue = new SerialQueue();
     this.phase = 'idle';
     this.actions = [];
+    this.actionSequences = 0;
     this.requests = new Map();
     this.usedRequestIds = new Set();
     this.captureFailures = 0;
@@ -71,12 +72,15 @@ export class GameRuntime {
   }
 
   status() {
+    const frame = this.phase === 'ready' ? this.history.latest() : null;
     return { phase: this.phase, sessionId: this.sessionId, game: this.game, url: this.gameUrl,
       sourceRevision: this.sourceRevision,
-      dimensions: this.dimensions, coordinateSpace: 'CSS pixels relative to the screenshot top-left',
+      dimensions: frame ? { width: frame.width, height: frame.height } : this.dimensions,
+      viewportDimensions: this.dimensions, coordinateSpace: 'CSS pixels relative to the screenshot top-left',
       bootPhase: this.bootPhase, readyReason: this.readyReason, message: this.message,
       loadingText: this.loadingText, lastNetworkError: this.lastNetworkError,
       runtimeHealth: this.runtimeHealth,
+      actionSequences: this.actionSequences,
       pendingRequests: [...this.pendingRequests.values()].slice(-5),
       connected: Boolean(this.context?.browser()?.isConnected() && this.page && !this.page.isClosed()),
       captureFpsRequested: this.fps, captureFailures: this.captureFailures,
@@ -105,6 +109,7 @@ export class GameRuntime {
       this.readyReason = null;
       this.history.clear();
       this.actions = [];
+      this.actionSequences = 0;
       this.requests.clear();
       this.usedRequestIds.clear();
       this.captureFailures = 0;
@@ -199,7 +204,7 @@ export class GameRuntime {
           // that initial document throws instead of waiting for game startup.
           this.bootPhase = 'loading-game-document';
           await shell.waitForLoadState('domcontentloaded', { timeout: remaining() });
-          await shell.addStyleTag({ content: '#canvas{outline:none!important;box-shadow:none!important}' });
+          await shell.addStyleTag({ content: '#canvas{outline:none!important;box-shadow:none!important}#scummvm-cursor-grab-hint{display:none!important}' });
         }
         const state = await startupProbe(shell.evaluate(readShellState));
         if (state) {
@@ -282,15 +287,17 @@ export class GameRuntime {
       if (!this.page || this.page.isClosed()) throw new Error('No connected game page');
       const sessionId = this.sessionId;
       const phase = this.phase;
-      const canvasBounds = phase === 'ready' && this.canvas ? await this.canvas.boundingBox() : null;
-      const renderedBounds = canvasBounds ? await bounded(this.canvas.evaluate(displayBounds, canvasBounds),
-        3000, 'Game renderer did not respond during capture') : null;
-      // ScummVM can change its internal canvas resolution (including when opening menus).
-      // Always expose one fixed viewport, including letterboxing, and address input in that space.
-      const data = await this.page.screenshot({ type: 'jpeg', quality: 90, scale: 'css', timeout: 3000 });
+      const geometry = phase === 'ready' ? await this.gameGeometry() : null;
+      const clip = geometry?.captureBounds;
+      const data = await this.page.screenshot({ type: 'jpeg', quality: 90, scale: 'css', timeout: 3000,
+        ...(clip ? { clip } : {}) });
       if (sessionId !== this.sessionId) throw new Error('Session changed during capture');
       const metadata = { sessionId, game: this.game, phase, reason,
-        ...this.dimensions, canvasBounds, displayBounds: renderedBounds, actionId: this.currentActionId || null,
+        width: clip?.width ?? this.dimensions.width, height: clip?.height ?? this.dimensions.height,
+        canvasBounds: geometry ? { ...geometry.canvasBounds, x: geometry.canvasBounds.x - clip.x,
+          y: geometry.canvasBounds.y - clip.y } : null,
+        displayBounds: clip ? { x: 0, y: 0, width: clip.width, height: clip.height } : null,
+        captureBounds: clip ?? null, actionId: this.currentActionId || null,
         step: this.currentStep ?? null };
       if (phase === 'ready' && this.phase === 'ready') return this.history.add(data, metadata);
       // Startup checks and explicit loading/error observations never enter the rolling buffer.
@@ -298,6 +305,14 @@ export class GameRuntime {
         monotonicMs: performance.now(), mimeType: 'image/jpeg', data };
     })();
     try { return await this.captureTask; } finally { this.captureTask = null; }
+  }
+
+  async gameGeometry() {
+    const canvasBounds = await this.canvas.boundingBox();
+    if (!canvasBounds) throw new Error('Game canvas is not visible');
+    const rendered = await bounded(this.canvas.evaluate(displayBounds, canvasBounds),
+      3000, 'Game renderer did not respond during capture');
+    return { canvasBounds, captureBounds: captureBounds(rendered, this.dimensions) };
   }
 
   async waitReady(timeoutMs = 25000) {
@@ -364,18 +379,18 @@ export class GameRuntime {
       if (this.usedRequestIds.size >= 10000) throw new Error('Session request limit reached; close and relaunch before further input');
       inputSignal.throwIfAborted();
       await this.assertReady(sessionId);
-      const box = await this.canvas.boundingBox();
-      if (!box) throw new Error('Game canvas is not visible');
+      const box = (await this.gameGeometry()).captureBounds;
       if (frameId) {
         const frame = this.history.get(frameId);
         if (!frame || frame.sessionId !== sessionId || frame.phase !== 'ready') throw new Error('Observation expired or belongs to another session; observe again');
-        if (frame.width !== this.dimensions.width || frame.height !== this.dimensions.height) throw new Error('Viewport dimensions differ from the referenced observation');
+        if (JSON.stringify(frame.captureBounds) !== JSON.stringify(box)) throw new Error('Game display geometry changed; observe again before issuing input');
       }
-      const actions = validateSequence(rawActions, this.dimensions.width, this.dimensions.height);
+      const actions = validateSequence(rawActions, box.width, box.height);
       const actionId = randomUUID();
       const record = { actionId, requestId, state: 'running', completed: 0, total: actions.length,
         startedAt: new Date().toISOString(), steps: [] };
       this.actions.push(record);
+      this.actionSequences++;
       if (this.actions.length > 100) this.actions.shift();
       this.currentActionId = actionId;
       const result = { action: record, replayed: false, screenshots: [] };
@@ -400,8 +415,11 @@ export class GameRuntime {
             step.frameId = frame.id;
             step.state = 'captured';
           } else {
+            if ('x' in action && JSON.stringify((await this.gameGeometry()).captureBounds) !== JSON.stringify(box)) {
+              throw new Error('Game display geometry changed during the sequence; observe again before issuing input');
+            }
             await this.canvas.focus();
-            await this.execute(action, { x: 0, y: 0, ...this.dimensions }, inputSignal);
+            await this.execute(action, box, inputSignal);
             step.state = 'delivered';
           }
           record.completed++;

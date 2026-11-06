@@ -9,9 +9,11 @@ const html = `<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AgentSCUMM</title><style>
 *{box-sizing:border-box}html,body{margin:0;background:#000;height:100%;overflow:hidden}
-#screen{display:block;width:100%;height:100%;image-rendering:pixelated;user-select:none;pointer-events:none}
+body{display:grid;grid-template-rows:minmax(0,1fr) 24px}
+#screen{display:block;width:100%;height:100%;object-fit:contain;image-rendering:pixelated;user-select:none;pointer-events:none}
 #screen[hidden]{display:none}
-</style><canvas id="screen" aria-label="Live game screen" hidden></canvas>
+footer{grid-row:2;padding:0 10px;background:#171717;color:#bbb;font:12px/24px system-ui,sans-serif;font-variant-numeric:tabular-nums}
+</style><canvas id="screen" aria-label="Live game screen" hidden></canvas><footer>Actions: <span id="actions">0</span></footer>
 <script>
 let lastId, gameTitle='AgentSCUMM';
 const screen=document.getElementById('screen'),context=screen.getContext('2d');
@@ -19,6 +21,7 @@ async function refresh(){
  try{
   const response=await fetch('status',{cache:'no-store'});if(!response.ok)throw Error('Session unavailable');
   const state=await response.json();
+  document.getElementById('actions').textContent=String(state.actionSequences??0);
   const name=state.game?state.game.split('-').map((word,index)=>index>0&&['a','an','and','of','the','in'].includes(word)?word:word.charAt(0).toUpperCase()+word.slice(1)).join(' '):null;
   gameTitle=name?'AgentSCUMM - '+name:'AgentSCUMM';document.title=gameTitle;
   const info=state.frame,bounds=info?.displayBounds||info?.canvasBounds;
@@ -35,7 +38,7 @@ async function refresh(){
      context.imageSmoothingEnabled=false;
      context.drawImage(image,x,y,width,height,0,0,screen.width,screen.height);
      screen.hidden=false;lastId=info.id;
-     window.webkit?.messageHandlers?.gameSize?.postMessage({width:screen.width,height:screen.height});
+     window.webkit?.messageHandlers?.gameSize?.postMessage({width:screen.width,height:screen.height,footerHeight:24});
     }finally{URL.revokeObjectURL(url);}
    }
   }

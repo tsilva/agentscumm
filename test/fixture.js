@@ -6,7 +6,7 @@ export async function startFixture({ navigationDelay = 0, startupDelay = 600, do
     if (request.url.startsWith('/scummvm.html')) {
       const mode = new URL(request.url, 'http://fixture').searchParams.get('mode');
       const html = `<!doctype html><html><style>body{margin:0;background:black}canvas{display:block;width:100vw;height:100vh}</style>
-        <div id="status">Loading fixture</div><canvas id="canvas" width="320" height="240" tabindex="0"></canvas><script>
+        <div id="scummvm-cursor-grab-hint" style="position:fixed;inset:0;background:magenta;z-index:100">Click the game to grab the cursor.</div><div id="status">Loading fixture</div><canvas id="canvas" width="320" height="240" tabindex="0"></canvas><script>
         window.events=[];window.__scummwebReadyState={state:'pending',target:'queen'};
         const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
         function paint(){ctx.fillStyle='#28523b';ctx.fillRect(0,0,320,240);ctx.fillStyle='#e9dc9b';ctx.font='18px sans-serif';ctx.fillText('Synthetic adventure',20,40);ctx.fillText('Inputs: '+events.length,20,90);ctx.fillRect((Date.now()/40)%260,160,20,20)}

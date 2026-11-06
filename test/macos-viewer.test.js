@@ -49,7 +49,7 @@ test('macOS spectator has app identity, receives frames, and reopens independent
     assert.equal(native.windowGeometry?.gameWidth, width, JSON.stringify({ native: native.windowGeometry,
       frame: runtime.history.latest()?.displayBounds, framesRequested, isOpen: native.isOpen }));
     assert.equal(native.windowGeometry?.gameHeight, height);
-    assert.ok(Math.abs(native.windowGeometry.contentWidth / native.windowGeometry.contentHeight - width / height) < 0.005,
+    assert.ok(Math.abs(native.windowGeometry.contentWidth / (native.windowGeometry.contentHeight - native.windowGeometry.footerHeight) - width / height) < 0.005,
       'Window content fits the current game aspect ratio');
   }
   const pid = native.child.pid;
@@ -66,7 +66,7 @@ test('macOS spectator has app identity, receives frames, and reopens independent
   assert.equal(runtime.status().viewerOpen, true);
   assert.notEqual(runtime.viewer.native.child.pid, pid);
   assert.equal(runtime.sessionId, sessionId);
-  assert.equal((await runtime.observe()).width, 960);
+  assert.equal((await runtime.observe()).width, 800);
   await runtime.close();
   assert.equal(runtime.status().viewerOpen, false);
 });

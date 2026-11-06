@@ -27,9 +27,11 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   assert.ok(acted.frame.monotonicMs > first.monotonicMs);
   const countInputs = () => runtime.shell.evaluate(() => events.filter(e => e.type === 'mousedown').length);
   assert.equal(await countInputs(), 1);
+  assert.equal(runtime.status().actionSequences, 1, 'One sequence counts once regardless of its steps');
   const clicked = await runtime.shell.evaluate(() => events.find(e => e.type === 'mousedown'));
   assert.equal(clicked.x, 200); assert.equal(clicked.y, 120);
   assert.equal((await runtime.act(request)).replayed, true);
+  assert.equal(runtime.status().actionSequences, 1, 'Cached retries do not count as new action sequences');
   assert.equal(await countInputs(), 1);
   await assert.rejects(runtime.act({ ...request, actions: [{ type: 'click', x: 20, y: 20 }] }), /different inputs/);
   runtime.requests.delete('first');
@@ -39,18 +41,33 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   await assert.rejects(runtime.act({ session_id: started.sessionId, request_id: 'invalid',
     actions: [{ type: 'click', x: 100, y: 100 }, { type: 'click', x: 10000, y: 0 }] }), /outside/);
   assert.equal(await countInputs(), 1);
-  // Changing the internal game's canvas geometry must not change screenshot coordinates.
+  // Screenshots crop to the game; input translates back through the crop offset.
   await runtime.canvas.evaluate(canvas => {
     canvas.style.width = '400px'; canvas.style.height = '300px';
     canvas.style.marginLeft = '90px'; canvas.style.marginTop = '50px';
   });
   const resized = await runtime.observe();
-  assert.equal(resized.width, 640); assert.equal(resized.height, 480);
-  assert.equal(resized.canvasBounds.x, 90); assert.equal(resized.canvasBounds.y, 50);
+  assert.equal(resized.width, 400); assert.equal(resized.height, 300);
+  assert.equal(resized.canvasBounds.x, 0); assert.equal(resized.canvasBounds.y, 0);
+  assert.deepEqual(resized.captureBounds, { x: 90, y: 50, width: 400, height: 300 });
+  await assert.rejects(runtime.act({ ...request, request_id: 'stale-geometry' }), /geometry changed/);
   await runtime.act({ session_id: started.sessionId, request_id: 'canvas-offset', frame_id: resized.id,
     actions: [{ type: 'click', x: 200, y: 120 }] });
   const offsetClick = await runtime.shell.evaluate(() => events.filter(e => e.type === 'mousedown').at(-1));
-  assert.equal(offsetClick.x, 110); assert.equal(offsetClick.y, 70);
+  assert.equal(offsetClick.x, 200); assert.equal(offsetClick.y, 120);
+  const originalExecute = runtime.execute.bind(runtime);
+  runtime.execute = async (action, bounds, signal) => {
+    await originalExecute(action, bounds, signal);
+    if (action.type === 'key') await runtime.canvas.evaluate(canvas => { canvas.style.marginLeft = '91px'; });
+  };
+  const beforeShift = await countInputs();
+  const shifted = await runtime.act({ session_id: started.sessionId, request_id: 'geometry-during-sequence',
+    actions: [{ type: 'key', key: 'c' }, { type: 'click', x: 20, y: 20 }], after_ms: 0 });
+  assert.equal(shifted.action.state, 'failed');
+  assert.match(shifted.action.error, /geometry changed/);
+  assert.equal(await countInputs(), beforeShift, 'A changed crop must not receive a stale coordinate input');
+  runtime.execute = originalExecute;
+  await runtime.canvas.evaluate(canvas => { canvas.style.marginLeft = '90px'; });
   await sleep(800);
   assert.ok(runtime.history.review({ count: 3 }).length >= 3);
 
@@ -63,7 +80,9 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   });
   assert.equal(await runtime.page.locator('.game-route-controls').isVisible(), false);
   assert.equal(await runtime.page.locator('.game-route-bottom-actions').isVisible(), false);
-  assert.equal(await runtime.viewer.page.locator('header,footer,button').count(), 0);
+  assert.equal(await runtime.viewer.page.locator('header,button').count(), 0);
+  await runtime.viewer.page.waitForFunction(count => document.getElementById('actions').textContent === String(count), runtime.status().actionSequences);
+  assert.match(await runtime.viewer.page.locator('footer').textContent(), /^Actions: \d+$/);
   const corner = await runtime.viewer.page.locator('#screen').evaluate(canvas =>
     [...canvas.getContext('2d').getImageData(0, 0, 1, 1).data]);
   assert.ok(corner[1] > corner[0] && corner[1] > corner[2], 'Cropped game starts with green game pixels, not black padding or magenta controls');
@@ -76,7 +95,7 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   assert.equal((await fetch(new URL('status', viewerUrl))).status, 200);
   assert.equal((await fetch(new URL('status', viewerUrl), { method: 'POST' })).status, 405);
   assert.equal((await fetch(new URL('/status', viewerUrl))).status, 404);
-  assert.equal((await runtime.observe()).width, 640);
+  assert.equal((await runtime.observe()).width, 400);
 
   // Failure halfway through: retain completed steps, never issue the rest, never replay on retry.
   const execute = runtime.execute.bind(runtime);
@@ -85,6 +104,7 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
     actions: [{ type: 'click', x: 20, y: 20 }, { type: 'key', key: 'b' }, { type: 'click', x: 30, y: 30 }] };
   const failed = await runtime.act(partial);
   assert.equal(failed.action.state, 'failed'); assert.equal(failed.action.completed, 1);
+  await runtime.viewer.page.waitForFunction(count => document.getElementById('actions').textContent === String(count), runtime.status().actionSequences);
   assert.equal(failed.action.steps[1].state, 'delivery-uncertain');
   const afterFailure = await countInputs();
   assert.equal((await runtime.act(partial)).replayed, true);
@@ -131,6 +151,7 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   assert.equal(runtime.status().history.frames, 0);
   const next = await runtime.start({ restart: true });
   assert.notEqual(next.sessionId, started.sessionId);
+  assert.equal(runtime.status().actionSequences, 0, 'A new game session resets the counter');
   assert.equal((await runtime.waitReady(15000)).phase, 'ready');
   await assert.rejects(runtime.act({ ...request, request_id: 'stale-session' }), /Session ID/);
   await runtime.closeGame();

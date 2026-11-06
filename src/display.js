@@ -43,8 +43,7 @@ export function installDisplayObserver() {
   }
 }
 
-// Return CSS geometry in the screenshot's coordinate space, including iframe
-// offsets. Keep the original canvas bounds for MCP input and older viewers.
+// Return CSS geometry in viewport coordinates, including iframe offsets.
 export function displayBounds(canvas, canvasBounds) {
   const bounds = canvas.__agentscummDisplayBounds;
   if (!bounds || bounds.canvasWidth !== canvas.width || bounds.canvasHeight !== canvas.height) return canvasBounds;
@@ -52,4 +51,14 @@ export function displayBounds(canvas, canvasBounds) {
     y: canvasBounds.y + bounds.y * canvasBounds.height / canvas.height,
     width: bounds.width * canvasBounds.width / canvas.width,
     height: bounds.height * canvasBounds.height / canvas.height };
+}
+
+// Clip inward to whole CSS pixels so fractional edges cannot add black gutters.
+export function captureBounds(bounds, viewport) {
+  const x = Math.max(0, Math.ceil(bounds.x));
+  const y = Math.max(0, Math.ceil(bounds.y));
+  const right = Math.min(viewport.width, Math.floor(bounds.x + bounds.width));
+  const bottom = Math.min(viewport.height, Math.floor(bounds.y + bounds.height));
+  if (right <= x || bottom <= y) throw new Error('Game display is outside the viewport');
+  return { x, y, width: right - x, height: bottom - y };
 }

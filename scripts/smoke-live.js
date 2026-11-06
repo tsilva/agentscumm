@@ -35,10 +35,12 @@ try {
   assert.equal(status.viewerOpen, true, status.viewerError || 'Viewer must open');
   const observed = await call('observe');
   const frame = info(observed);
-  assert.equal(frame.width, 960); assert.equal(frame.height, 720);
+  assert.ok(frame.width > 300 && frame.width < 960);
+  assert.ok(frame.height > 200 && frame.height < 720);
+  assert.deepEqual(frame.displayBounds, { x: 0, y: 0, width: frame.width, height: frame.height });
   await saveImage(observed, 'initial.jpg');
   const sequence = { session_id: launched.sessionId, request_id: 'live-controls', frame_id: frame.id,
-    actions: [{ type: 'move', x: 480, y: 360 }, { type: 'screenshot' }, { type: 'click', x: 480, y: 360 },
+    actions: [{ type: 'move', x: Math.floor(frame.width / 2), y: Math.floor(frame.height / 2) }, { type: 'screenshot' }, { type: 'click', x: Math.floor(frame.width / 2), y: Math.floor(frame.height / 2) },
       { type: 'wait', milliseconds: 1500 }, { type: 'key', key: 'F5' }, { type: 'wait', milliseconds: 500 }] };
   const acted = await call('act', sequence);
   assert.equal(acted.isError, false, acted.content[0].text);

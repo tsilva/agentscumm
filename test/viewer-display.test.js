@@ -6,7 +6,7 @@ import path from 'node:path';
 import { GameRuntime } from '../src/runtime.js';
 import { startFixture } from './fixture.js';
 
-test('spectator follows rendered game geometry across resolutions, black scenes and menus', { timeout: 40000 }, async t => {
+test('screenshots and spectator share game-only geometry across resolutions, black scenes and menus', { timeout: 40000 }, async t => {
   const fixture = await startFixture();
   const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-display-'));
   const runtime = new GameRuntime({ baseUrl: fixture.url, dataDir, viewer: false, fps: 2 });
@@ -20,6 +20,9 @@ test('spectator follows rendered game geometry across resolutions, black scenes 
   await runtime.shell.evaluate(() => {
     document.getElementById('canvas').remove();
     const canvas = document.createElement('canvas'); canvas.id = 'canvas'; document.body.append(canvas);
+    globalThis.cropEvents = [];
+    for (const type of ['mousedown', 'mouseup', 'mousemove']) canvas.addEventListener(type, event =>
+      cropEvents.push({ type, x: event.offsetX, y: event.offsetY }));
     const gl = canvas.getContext('webgl', { preserveDrawingBuffer: true });
     const shader = (type, source) => { const s = gl.createShader(type); gl.shaderSource(s, source); gl.compileShader(s); return s; };
     const program = gl.createProgram();
@@ -67,10 +70,32 @@ test('spectator follows rendered game geometry across resolutions, black scenes 
     const frame = await runtime.observe();
     const expected = scenario.overlay ? { x: 10, y: 20, width: scenario.width, height: scenario.height }
       : { x: scenario.x + 10, y: scenario.y + 20, width: scenario.gameWidth, height: scenario.gameHeight };
-    assert.deepEqual(frame.displayBounds, expected);
+    assert.deepEqual(frame.captureBounds, expected);
+    assert.deepEqual(frame.displayBounds, { x: 0, y: 0, width: expected.width, height: expected.height });
     assert.equal(frame.canvasBounds.width, scenario.width, 'Original canvas geometry stays available');
-    assert.equal(frame.width, 960); assert.equal(frame.height, 720, 'MCP coordinates stay fixed');
-    await runtime.viewer.page.waitForFunction(id => lastId === id, frame.id);
+    assert.equal(frame.width, expected.width); assert.equal(frame.height, expected.height);
+    assert.deepEqual(runtime.status().dimensions, { width: frame.width, height: frame.height });
+    const pixels = await runtime.page.evaluate(async encoded => {
+      const image = new Image(); image.src = 'data:image/jpeg;base64,' + encoded; await image.decode();
+      const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
+      const ctx = canvas.getContext('2d'); ctx.drawImage(image, 0, 0);
+      return { width: image.width, height: image.height, corner: [...ctx.getImageData(2, 2, 1, 1).data] };
+    }, frame.data.toString('base64'));
+    assert.equal(pixels.width, expected.width); assert.equal(pixels.height, expected.height);
+    if (!scenario.black) assert.ok(pixels.corner[1] > 150, 'MCP image starts with game pixels, without gutters or the grab hint');
+    else assert.ok(pixels.corner.slice(0, 3).every(value => value < 10), 'Black game scenes retain their full geometry');
+    const input = await runtime.act({ session_id: runtime.sessionId, request_id: 'crop-' + frame.id, frame_id: frame.id,
+      actions: [{ type: 'move', x: 21, y: 29 }, { type: 'click', x: 23, y: 31 },
+        { type: 'drag', from_x: 25, from_y: 33, x: 27, y: 35 }], after_ms: 0 });
+    assert.equal(input.action.state, 'completed');
+    const events = await runtime.shell.evaluate(() => cropEvents.splice(0));
+    const offsetX = expected.x - 10, offsetY = expected.y - 20;
+    assert.ok(events.some(event => event.type === 'mousemove' && event.x === offsetX + 21 && event.y === offsetY + 29));
+    assert.deepEqual(events.filter(event => event.type === 'mousedown').map(({ x, y }) => ({ x, y })),
+      [{ x: offsetX + 23, y: offsetY + 31 }, { x: offsetX + 25, y: offsetY + 33 }]);
+    assert.deepEqual(events.filter(event => event.type === 'mouseup').at(-1),
+      { type: 'mouseup', x: offsetX + 27, y: offsetY + 35 });
+    await runtime.viewer.page.waitForFunction(id => lastId === id, input.frame.id);
     const actual = await runtime.viewer.page.locator('#screen').evaluate(canvas => ({ width: canvas.width, height: canvas.height,
       corner: [...canvas.getContext('2d').getImageData(2, 2, 1, 1).data] }));
     assert.equal(actual.width, expected.width); assert.equal(actual.height, expected.height);

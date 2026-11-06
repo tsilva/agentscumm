@@ -20,7 +20,7 @@ const runtime = new GameRuntime({ viewer: !values['no-viewer'], baseUrl: values[
 
 const server = new McpServer({ name: 'agentscumm', version: '0.1.0' }, {
   instructions: 'Start a ScummWEB game with session(operation="start"), poll status(wait_ms=10000) until phase=ready, then observe and act. '
-    + 'Coordinates are screenshot-relative CSS pixels. Supply session_id and a unique request_id for each action sequence; '
+    + 'Ready screenshots show only the game; dimensions can change with menus. Coordinates are screenshot-relative CSS pixels. Supply session_id and a unique request_id for each action sequence; '
     + 'reuse the same request_id only to retrieve the identical request result after an uncertain response. '
     + 'Input delivery is not proof of puzzle success. Use observe(source="history") for missed events. The spectator is read-only.',
 });
