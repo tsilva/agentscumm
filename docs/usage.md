@@ -14,6 +14,66 @@ codex mcp add agentscumm -- node "$PWD/src/index.js" --no-viewer
 
 `node src/index.js` runs the stdio server directly. Its stdout is reserved for MCP protocol messages. It does not launch a game until a client calls `session` with `operation: "start"`.
 
+## Evaluator telemetry and stop conditions
+
+The launcher accepts an evaluator-only condition before the MCP client starts a
+game. For example, Queen's hotel laundry/downstairs room is room 71 in the
+supported engine build:
+
+```sh
+node src/index.js --instance laundry-trial \
+  --evaluation-log /absolute/trial/variables.jsonl \
+  --result-file /absolute/trial/result.json \
+  --telemetry-ms 250 \
+  --stop-condition '{"all":[{"variable":"engine_id","equals":"queen"},{"variable":"room_id","equals":71},{"variable":"room_ready","equals":true}]}'
+```
+
+Launch the game through the usual MCP `session` tool after connecting. Each
+trial needs fresh output paths. With no explicit paths, files are placed inside
+that instance's data directory. The Play Game local MCP client forwards these
+same four options and ends when its server stops.
+
+Conditions are a nonempty `all` list of typed equality predicates. Supported
+variables are `engine_id` (string), `room_id` (integer), `room_name` (string), and
+`room_ready` (boolean). There is no JavaScript expression execution. Advertised
+snapshots include `schema_version` and `native_time_ms`; only the named variables
+can appear in conditions. Any evaluation option enables telemetry; omit
+`--stop-condition` to record variables without a success trigger.
+
+This requires ScummWEB's opt-in Queen evaluation hook. Existing deployments
+without that hook, and engines without a provider, fail evaluation explicitly
+after five seconds of ready gameplay. No screenshot matching or inferred room
+IDs substitute for missing telemetry. Pin the engine/game data build when
+comparing trials. `room_ready` means the engine has presented an update with no
+pending room transition or running cutaway; it does not promise dialogue has
+finished or that a puzzle is solved.
+
+The evaluator polls independently of player observations, and also checks
+between delivered action steps. Native room/ready transitions are queued so a
+brief visit between polls is retained. Queue overflow, invalid telemetry, and
+backwards timestamps fail the trial. Snapshots are appended periodically to the
+evaluation log, never to gameplay MCP results, frame metadata, or the spectator.
+The sampling interval is 50–5000 ms (default 250). It bounds polling cadence,
+not exact detection latency under load; receipts preserve both native event
+time and host detection time.
+
+On a match, the evaluator latches success, aborts pending waits/key holds, blocks
+later steps and new inputs, writes the result and a final screenshot, closes the
+owned game/spectator, and exits **0**. A partial action reports `stopped`, with an
+interrupted wait distinguished from uncertain input delivery. The receipt
+contains `success: true`, `reason: "stop_condition"`, the matching variables,
+condition, session/revision IDs and action-sequence count. Its screenshot is an
+audit capture taken after detection, not an exact native-event frame. Runtime
+evaluation errors exit **1** with `success: false`. Closing before success is
+also unsuccessful; an ordinary process exit alone is never proof of reaching a
+goal. Stdout remains exclusively MCP; stderr announces the terminal result-file
+path. Result/log files are created exclusively and cannot overwrite a prior
+trial's outputs.
+
+Keep evaluator files and browser/runtime inspection outside the player's tool
+access when requiring evaluator-only information. Separate files and omitted MCP
+fields do not isolate a player with unrestricted filesystem/browser access.
+
 ## Parallel instances
 
 Give each agent a separate stdio MCP server process. With no storage options, each process automatically gets a unique instance ID and persistent data directory at `.agentscumm/instances/<instance-id>/`. Agents can play the same game or different games concurrently. Each instance has its own browser profile, saves/cache, action queue, request cache, frame history, loopback spectator endpoint and spectator window. Closing or restarting one server leaves the others running. Each process still owns one active game; sharing one MCP connection does not create independent games.

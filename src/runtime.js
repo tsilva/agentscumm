@@ -13,6 +13,7 @@ import { installHealthObserver, readShellState, bounded } from './health.js';
 import { installDisplayObserver, displayBounds, captureBounds } from './display.js';
 import { claimDataDir } from './instances.js';
 import { readLibrary, validateZipPaths, importZipFiles, saveLibrary } from './library.js';
+import { enableEvaluation, readEvaluation } from './evaluation.js';
 
 export const games = [
   ['beneath-a-steel-sky', 'sky', true],
@@ -79,6 +80,7 @@ export class GameRuntime {
     this.launchTimeoutMs = options.launchTimeoutMs ?? 120000;
     this.closing = false;
     this.shutdownSignal = new AbortController();
+    this.evaluation = options.evaluation;
   }
 
   status() {
@@ -146,6 +148,7 @@ export class GameRuntime {
 
   async start({ game = 'flight-of-the-amazon-queen', mode = 'skip_intro', restart = false } = {}) {
     return this.queue.run(async () => {
+      if (this.evaluation?.result) throw new Error('Evaluation has ended; start a new launcher process for another trial');
       if (this.closing) throw new Error('Runtime is shutting down');
       if (this.libraryImport?.state === 'importing') throw new Error('Wait for the library import to finish');
       if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(game)) throw new Error('Game must be a ScummWEB catalog slug');
@@ -185,6 +188,7 @@ export class GameRuntime {
       this.bootTask = this.boot(sessionId).catch(async error => {
         if (this.sessionId !== sessionId || this.closing) return;
         this.phase = 'error'; this.message = error.message; this.readyReason = null;
+        this.evaluation?.fail(error);
         await this.log('launch-error', { message: error.message }).catch(() => {});
       });
       return this.status();
@@ -241,6 +245,7 @@ export class GameRuntime {
     const page = this.page;
     await page.addInitScript(installHealthObserver);
     await page.addInitScript(installDisplayObserver);
+    if (this.evaluation) await page.addInitScript(enableEvaluation);
     page.on('request', request => {
       const url = new URL(request.url());
       if (['http:', 'https:'].includes(url.protocol)) this.pendingRequests.set(request, { path: url.pathname, type: request.resourceType() });
@@ -329,6 +334,7 @@ export class GameRuntime {
               remaining();
               await this.capture('launch-ready');
               this.scheduleCapture(sessionId);
+              if (this.evaluation) this.scheduleEvaluation(sessionId);
               await this.log('ready', { reason: this.readyReason, firstFrame: this.history.latest()?.id });
               return;
             }
@@ -462,7 +468,8 @@ export class GameRuntime {
   }
 
   async act({ session_id: sessionId, request_id: requestId, actions: rawActions, frame_id: frameId, after_ms: afterMs = 200 }, signal) {
-    const inputSignal = signal ? AbortSignal.any([signal, this.shutdownSignal.signal]) : this.shutdownSignal.signal;
+    const inputSignal = AbortSignal.any([this.shutdownSignal.signal,
+      ...(signal ? [signal] : []), ...(this.evaluation ? [this.evaluation.signal.signal] : [])]);
     return this.queue.run(async () => {
       if (sessionId !== this.sessionId) throw new Error('Session ID does not match the current game');
       const fingerprint = createHash('sha256').update(JSON.stringify({ rawActions, frameId, afterMs })).digest('hex');
@@ -520,6 +527,8 @@ export class GameRuntime {
           }
           record.completed++;
           await this.log('action-step', { actionId, ...step });
+          await this.pollEvaluation();
+          inputSignal.throwIfAborted();
           await this.assertReady(sessionId);
         }
         if (afterMs) await sleep(afterMs, undefined, { signal: inputSignal });
@@ -527,10 +536,11 @@ export class GameRuntime {
         result.frame = await this.capture('after-action');
         record.state = 'completed';
       } catch (error) {
-        record.state = 'failed'; record.error = error.message;
+        record.state = this.evaluation?.result?.success ? 'stopped' : 'failed'; record.error = error.message;
         const step = record.steps.at(-1);
-        if (step?.state === 'issuing') step.state = step.type === 'screenshot' ? 'capture-failed' : 'delivery-uncertain';
-        try { result.frame = await this.capture('failed-action'); } catch { /* Status remains available after renderer loss. */ }
+        if (step?.state === 'issuing') step.state = record.state === 'stopped' && step.type === 'wait'
+          ? 'interrupted' : step.type === 'screenshot' ? 'capture-failed' : 'delivery-uncertain';
+        try { result.frame = await this.capture(record.state === 'stopped' ? 'stopped-action' : 'failed-action'); } catch { /* Status remains available after renderer loss. */ }
       } finally {
         record.finishedAt = new Date().toISOString();
         this.currentActionId = null; this.currentStep = null;
@@ -572,7 +582,34 @@ export class GameRuntime {
     });
   }
 
+  async pollEvaluation() {
+    if (!this.evaluation || this.evaluation.result || this.phase !== 'ready') return;
+    if (this.evaluationRead) return this.evaluationRead;
+    this.evaluationRead = (async () => {
+      try {
+        const payload = await bounded(this.shell.evaluate(readEvaluation), 2000, 'Evaluator could not read engine telemetry');
+        if (!payload.current && performance.now() - this.evaluationReadyAt > 5000) {
+          throw new Error('This game runtime does not provide evaluation variables; rebuild with the supported engine hook');
+        }
+        if (payload.current) this.evaluation.accept(payload);
+      } catch (error) { this.evaluation.fail(error); }
+    })();
+    try { await this.evaluationRead; } finally { this.evaluationRead = null; }
+  }
+
+  scheduleEvaluation(sessionId) {
+    this.evaluationReadyAt = performance.now();
+    const tick = async () => {
+      if (this.closing || this.sessionId !== sessionId || this.evaluation.result) return;
+      if (this.phase !== 'ready') { this.evaluation.fail(new Error('Game runtime left the ready state')); return; }
+      await this.pollEvaluation();
+      if (!this.closing && !this.evaluation.result) this.evaluationTimer = setTimeout(tick, this.evaluation.intervalMs);
+    };
+    this.evaluationTimer = setTimeout(tick, 0);
+  }
+
   async stopPage() {
+    clearTimeout(this.evaluationTimer);
     clearTimeout(this.captureTimer);
     const page = this.page;
     this.page = null; this.canvas = null; this.shell = null;
@@ -599,6 +636,7 @@ export class GameRuntime {
     this.closing = true;
     this.shutdownSignal.abort(new Error('Game runtime is shutting down'));
     clearTimeout(this.captureTimer);
+    clearTimeout(this.evaluationTimer);
     await this.stopPage();
     await this.libraryPage?.close();
     this.libraryPage = null;

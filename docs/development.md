@@ -14,6 +14,17 @@ On macOS, the test suite also opens the native spectator, checks its app identit
 
 Parallel-instance coverage starts independent stdio MCP servers with automatic profiles, exercises simultaneous games and identical request IDs, rejects cross-instance session input and live-profile reuse, and verifies that history, spectator endpoints and shutdown remain independent. It also checks persistent profile recovery and concurrent native spectator processes on macOS. `src/instances.js` guards data-directory ownership across server processes.
 
+Evaluator coverage tests typed stop predicates, pending room transitions, brief
+visits retained between polls, missing telemetry, active-wait interruption,
+blocked post-goal inputs, cached partial results, private telemetry, result
+receipts, zero exit status on success, and Play Game client shutdown. Run the
+focused checks with `node --test test/evaluation.test.js test/play-game-client.test.js`.
+When diagnosing timing failures under competing browser/build load, run the
+suite with `node --test --test-concurrency=1 test/*.test.js`, then
+`pnpm test:export`. The synthetic checks do not establish the room mapping or
+arrival timing of a real game; verify that through MCP against the pinned native
+provider before treating a new endpoint as a benchmark.
+
 `pnpm test:live` launches Flight of the Amazon Queen on the configured live site through stdio MCP, opens the spectator, checks screenshot dimensions, exercises click/key/wait sequences and retry behavior, and retrieves frame history. It uses an isolated temporary profile and closes its browser processes afterward. It does not solve the game. Local verification captures stay under ignored `.internal/`.
 
 Runtime code is in `src/`: `index.js` exposes MCP, `runtime.js` owns the game lifecycle and controls, `health.js` observes mechanical runtime failures, `viewer.js` serves the spectator, `macos-app.js` builds and manages the native spectator, `history.js` bounds visual history, and `actions.js` validates and serializes input. `display.js` observes render geometry for shared screenshot and spectator cropping; tests cover pillarboxing, letterboxing, widescreen and portrait games, black scenes, menus and native window aspect changes. The macOS app source and bundle metadata are in `macos/`. ScummWEB remains the separate browser game runtime; this project does not copy its game payloads.

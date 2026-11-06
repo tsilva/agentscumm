@@ -75,3 +75,30 @@ test('play-game client records MCP images and calls inside a resumable run', { t
   resumed.child.stdin.write('quit\n');
   assert.equal((await resumed.exited).code, 0);
 });
+
+test('play-game client forwards an evaluator goal and exits when it succeeds', { timeout: 30000 }, async t => {
+  const fixture = await startFixture({ evaluation: true });
+  const runDir = path.join(root, '.internal/synthetic-game', `goal-test-${randomUUID()}`);
+  const condition = { all: [{ variable: 'engine_id', equals: 'queen' },
+    { variable: 'room_id', equals: 71 }, { variable: 'room_ready', equals: true }] };
+  const client = startClient(['--run-dir', runDir, '--no-viewer', '--base-url', fixture.url,
+    '--stop-condition', JSON.stringify(condition), '--telemetry-ms', '50']);
+  t.after(async () => {
+    if (client.child.exitCode === null) client.child.kill('SIGTERM');
+    await client.exited; await fixture.close(); await rm(runDir, { recursive: true, force: true });
+  });
+  assert.equal((await client.next()).ready, true);
+  await client.call('session', { operation: 'start', game: 'synthetic-game', mode: 'beginning' });
+  const launched = await client.call('status', { wait_ms: 10000 });
+  assert.equal(launched.content[0].phase, 'ready');
+  client.child.stdin.write(JSON.stringify({ name: 'act', arguments: {
+    session_id: launched.content[0].sessionId, request_id: 'goal', actions: [
+      { type: 'click', x: 20, y: 20 }, { type: 'wait', milliseconds: 10000 }, { type: 'click', x: 30, y: 30 }],
+  } }) + '\n');
+  let ended;
+  do { ended = await client.next(); } while (ended.event !== 'evaluation-ended');
+  assert.equal(ended.success, true);
+  assert.equal((await client.exited).code, 0);
+  const receipt = JSON.parse(await readFile(ended.resultFile, 'utf8'));
+  assert.equal(receipt.success, true); assert.equal(receipt.variables.room_id, 71);
+});

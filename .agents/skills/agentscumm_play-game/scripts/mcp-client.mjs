@@ -11,6 +11,8 @@ const root = await realpath(path.resolve(import.meta.dirname, '../../../..'));
 const { values } = parseArgs({ options: {
   'run-dir': { type: 'string' }, resume: { type: 'boolean', default: false },
   'no-viewer': { type: 'boolean', default: false }, 'base-url': { type: 'string' },
+  'stop-condition': { type: 'string' }, 'evaluation-log': { type: 'string' },
+  'result-file': { type: 'string' }, 'telemetry-ms': { type: 'string' },
 } });
 if (!values['run-dir']) throw new Error('Provide --run-dir inside .internal/<game-id>/<run-id>/');
 const runDir = path.resolve(root, values['run-dir']);
@@ -39,6 +41,9 @@ const client = new Client({ name: 'agentscumm_play-game', version: '1.0' });
 const serverArgs = [path.join(root, 'src/index.js'), '--data-dir', browserDir];
 if (values['no-viewer']) serverArgs.push('--no-viewer');
 if (values['base-url']) serverArgs.push('--base-url', values['base-url']);
+for (const option of ['stop-condition', 'evaluation-log', 'result-file', 'telemetry-ms']) {
+  if (values[option] !== undefined) serverArgs.push(`--${option}`, values[option]);
+}
 const input = createInterface({ input: process.stdin });
 const lines = input[Symbol.asyncIterator]();
 let closing;
@@ -51,6 +56,9 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
 });
 try {
   await client.connect(new StdioClientTransport({ command: process.execPath, args: serverArgs, cwd: root }));
+  const transport = client.transport;
+  const onclose = transport.onclose;
+  transport.onclose = () => { onclose?.(); input.close(); };
   console.log(JSON.stringify({ ready: true, runDir, pid: process.pid,
     tools: (await client.listTools()).tools.map(tool => tool.name) }));
   for await (const line of lines) {
@@ -81,4 +89,13 @@ try {
       console.log(JSON.stringify(output));
     }
   }
-} finally { await close(); }
+} finally {
+  await close();
+  if (values['stop-condition'] !== undefined) {
+    const resultFile = path.resolve(values['result-file'] || path.join(browserDir, 'result.json'));
+    let success = false;
+    try { success = JSON.parse(await readFile(resultFile, 'utf8')).success === true; } catch { /* An absent receipt is never success. */ }
+    console.log(JSON.stringify({ event: 'evaluation-ended', success, resultFile }));
+    if (!success) process.exitCode = 1;
+  }
+}

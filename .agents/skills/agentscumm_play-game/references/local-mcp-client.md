@@ -26,3 +26,21 @@ These are sequential examples, not a startup batch: check `status.sourceRevision
 The client uses an isolated `browser/` profile inside the run directory, rather than the desktop-attached server's default profile. It does not automatically inherit that profile's saves or live progress. Preserve existing sessions and profiles; never copy an in-use profile or silently replace an ongoing run with a new game. Reuse the local client's live process when healthy; `--resume` preserves its existing browser data after a restart, and `session` with `operation: "start"`, `mode: "continue"` requests supported save recovery.
 
 Record `local_mcp_client` as the connection route and retain the server's actual `sourceRevision` separately from checkout metadata. Do not describe this route as a repaired desktop connection. Keep the client alive while gameplay or the spectator is needed. Send `quit` only when intentionally ending that connection; closing the client terminates its owned game and viewer while preserving saved browser data. A failed client startup or tool call is a concrete error to investigate, not permission to bypass MCP or invent progress.
+
+For a user-requested evaluator endpoint, the client forwards `--stop-condition`
+(the JSON predicate), `--evaluation-log`, `--result-file`, and `--telemetry-ms` to
+the launcher. Configure these before startup; see the evaluator section in
+`docs/usage.md` for the typed schema and supported native provider. Keep output
+paths inside the ignored run directory. Preserve the requested condition in the
+run manifest as an explicit run limit. Use the ordinary clean-commit and runtime
+provenance gates; evaluator mode does not bypass them.
+
+The launcher automatically closes the owned session when the condition matches.
+The client reports `evaluation-ended` and its success flag/receipt path, then
+exits. The final `act` response may be interrupted by transport shutdown. Verify
+the receipt's `success: true` and `reason: "stop_condition"` before treating that
+closure as the requested endpoint. Record the result and saved evidence in the
+working manifest/memory. An endpoint success is not a completed game: do not
+queue completed-game finalization or register a completed-game benchmark unless
+the endpoint itself is verified game-ending evidence. Never restart the game
+merely because an expected evaluator success closed its MCP connection.

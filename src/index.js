@@ -6,17 +6,27 @@ import { z } from 'zod';
 import { GameRuntime } from './runtime.js';
 import { actionSchema } from './actions.js';
 import { imageContent } from './history.js';
+import path from 'node:path';
+import { RunEvaluation, evaluationReporter } from './evaluation.js';
 
 const { values } = parseArgs({ options: {
   'no-viewer': { type: 'boolean', default: false },
   'base-url': { type: 'string' }, 'data-dir': { type: 'string' }, instance: { type: 'string' },
   width: { type: 'string' }, height: { type: 'string' }, fps: { type: 'string' },
   'buffer-seconds': { type: 'string' },
+  'stop-condition': { type: 'string' }, 'evaluation-log': { type: 'string' },
+  'result-file': { type: 'string' }, 'telemetry-ms': { type: 'string' },
 } });
+const evaluationEnabled = ['stop-condition', 'evaluation-log', 'result-file', 'telemetry-ms'].some(key => values[key] !== undefined);
+const evaluation = evaluationEnabled ? new RunEvaluation({ condition: values['stop-condition'],
+  intervalMs: values['telemetry-ms'] === undefined ? undefined : Number(values['telemetry-ms']) }) : undefined;
 const runtime = new GameRuntime({ viewer: !values['no-viewer'], baseUrl: values['base-url'],
   dataDir: values['data-dir'], instance: values.instance, width: values.width ? Number(values.width) : undefined,
   height: values.height ? Number(values.height) : undefined, fps: values.fps ? Number(values.fps) : undefined,
-  bufferSeconds: values['buffer-seconds'] ? Number(values['buffer-seconds']) : undefined });
+  bufferSeconds: values['buffer-seconds'] ? Number(values['buffer-seconds']) : undefined, evaluation });
+const evaluationLog = path.resolve(values['evaluation-log'] || path.join(runtime.dataDir, 'evaluation.jsonl'));
+const resultFile = path.resolve(values['result-file'] || path.join(runtime.dataDir, 'result.json'));
+const reporter = evaluation ? await evaluationReporter(evaluationLog, resultFile) : undefined;
 
 const server = new McpServer({ name: 'agentscumm', version: '0.1.0' }, {
   instructions: 'Start a ScummWEB game with session(operation="start"), poll status(wait_ms=10000) until phase=ready, then observe and act. '
@@ -105,14 +115,36 @@ tool('act', 'Execute at most 32 ordered click/move/key/drag/wait/screenshot step
 });
 
 let shuttingDown = false;
-async function shutdown() {
+async function shutdown(exitCode = 0, terminal) {
   if (shuttingDown) return;
   shuttingDown = true;
+  if (terminal) {
+    // The goal signal aborts an active wait/key hold. Let its partial action ledger finish first.
+    await runtime.queue.tail;
+    let frame;
+    try { frame = await runtime.capture('evaluation-stop'); } catch { /* Failure receipts can lack an image. */ }
+    await reporter.finish({ ...terminal, session_id: runtime.sessionId, game: runtime.game,
+      source_revision: runtime.sourceRevision, action_sequences: runtime.actionSequences }, frame);
+    process.stderr.write(JSON.stringify({ event: terminal.event, success: terminal.success, result_file: resultFile }) + '\n');
+    await new Promise(resolve => setImmediate(resolve));
+  } else if (reporter) {
+    process.exitCode = 1;
+    await reporter.finish({ event: 'failure', success: false, reason: 'launcher_closed_before_condition' });
+  }
   await runtime.close();
   await server.close();
+  await reporter?.close();
+  if (terminal) process.exit(exitCode);
 }
+evaluation?.on('telemetry', event => { void reporter.append(event).catch(error => evaluation.fail(error)); });
+evaluation?.once('terminal', result => {
+  void shutdown(result.success ? 0 : 1, result).catch(error => {
+    process.stderr.write(`Evaluation shutdown failed: ${error.message}\n`);
+    process.exit(1);
+  });
+});
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
-  void shutdown().then(() => process.exit(0)).catch(error => { console.error(error.message); process.exit(1); });
+  void shutdown().then(() => process.exit(evaluation ? 1 : 0)).catch(error => { console.error(error.message); process.exit(1); });
 });
 process.stdin.once('end', () => { void shutdown().catch(error => console.error(error.message)); });
 await server.connect(new StdioServerTransport());
