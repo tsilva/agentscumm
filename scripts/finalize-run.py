@@ -30,7 +30,8 @@ ANNOTATED_BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Wa
 PREVIOUS_BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
 SEPARATE_CACHE_BENCHMARK_HEADER = "| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Tokens | Input tokens | Output tokens | Cached input tokens (% of input) | Date (UTC) |"
 SEPARATE_CACHE_BENCHMARK_SEPARATOR = "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
-BENCHMARK_HEADER = "| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Tokens | Input tokens | Output tokens | Date (UTC) |"
+INLINE_CACHE_BENCHMARK_HEADER = "| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Tokens | Input tokens | Output tokens | Date (UTC) |"
+BENCHMARK_HEADER = INLINE_CACHE_BENCHMARK_HEADER.replace("| Input tokens |", "| Input tokens (% cached) |")
 BENCHMARK_SEPARATOR = "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
 BENCHMARK_NOTES = ("✅ marks a completed archive. Unfinished runs show the verified milestone count and latest milestone when available. "
                    "Otherwise they show a declared estimate or Unknown. "
@@ -134,7 +135,7 @@ def benchmark_input(total, cached):
         return "0 (N/A)"
     if cached is None:
         return f"{total:,} (Unknown)"
-    return f"{total:,} ({cached / total:.2%} cached)"
+    return f"{total:,} ({cached / total:.2%})"
 
 
 def benchmark_usage(stats):
@@ -192,7 +193,7 @@ def upgrade_benchmark_table(text, stats=None):
     lines = text.splitlines(keepends=True)
     headers = [i for i, line in enumerate(lines) if line.strip() in (
         LEGACY_BENCHMARK_HEADER, PREVIOUS_BENCHMARK_HEADER, ANNOTATED_BENCHMARK_HEADER,
-        SEPARATE_CACHE_BENCHMARK_HEADER, BENCHMARK_HEADER)]
+        SEPARATE_CACHE_BENCHMARK_HEADER, INLINE_CACHE_BENCHMARK_HEADER, BENCHMARK_HEADER)]
     require(len(headers) <= 1, "Multiple benchmark comparison tables; resolve before registration")
     if headers and lines[headers[0]].strip() != BENCHMARK_HEADER:
         position = headers[0]
@@ -201,6 +202,7 @@ def upgrade_benchmark_table(text, stats=None):
         separator = {
             LEGACY_BENCHMARK_HEADER: LEGACY_BENCHMARK_SEPARATOR,
             SEPARATE_CACHE_BENCHMARK_HEADER: SEPARATE_CACHE_BENCHMARK_SEPARATOR,
+            INLINE_CACHE_BENCHMARK_HEADER: BENCHMARK_SEPARATOR,
         }.get(header, PREVIOUS_BENCHMARK_SEPARATOR)
         require(position + 1 < len(lines) and lines[position + 1].strip() == separator,
                 "Invalid previous benchmark comparison table separator")
@@ -208,17 +210,21 @@ def upgrade_benchmark_table(text, stats=None):
         position += 2
         while position < len(lines) and lines[position].lstrip().startswith("|"):
             cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", lines[position].strip())[1:-1]]
-            require(len(cells) == (9 if legacy else 13), "Invalid previous benchmark row")
-            if legacy:
-                cells[7:7] = ["Unknown"] * 4
-            if header != SEPARATE_CACHE_BENCHMARK_HEADER:
-                cost = re.sub(r" · rates [0-9]{4}-[0-9]{2}-[0-9]{2}$", "", cells[10]).removesuffix(" (Standard assumed)")
-                cells = [*cells[:2], cost, *cells[3:6], *cells[11:13], *cells[6:10], cells[2]]
-            total = cells[9].replace(",", "")
-            cached = cells[11].partition(" ")[0].replace(",", "")
-            if total.isdecimal():
-                cells[9] = benchmark_input(int(total), int(cached) if cached.isdecimal() else None)
-            del cells[11]
+            if header == INLINE_CACHE_BENCHMARK_HEADER:
+                require(len(cells) == 12, "Invalid previous benchmark row")
+                cells[9] = cells[9].replace("% cached)", "%)")
+            else:
+                require(len(cells) == (9 if legacy else 13), "Invalid previous benchmark row")
+                if legacy:
+                    cells[7:7] = ["Unknown"] * 4
+                if header != SEPARATE_CACHE_BENCHMARK_HEADER:
+                    cost = re.sub(r" · rates [0-9]{4}-[0-9]{2}-[0-9]{2}$", "", cells[10]).removesuffix(" (Standard assumed)")
+                    cells = [*cells[:2], cost, *cells[3:6], *cells[11:13], *cells[6:10], cells[2]]
+                total = cells[9].replace(",", "")
+                cached = cells[11].partition(" ")[0].replace(",", "")
+                if total.isdecimal():
+                    cells[9] = benchmark_input(int(total), int(cached) if cached.isdecimal() else None)
+                del cells[11]
             lines[position] = "| " + " | ".join(cells) + " |\n"
             position += 1
     if stats is not None:

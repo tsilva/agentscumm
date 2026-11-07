@@ -341,8 +341,8 @@ class FinalizationTests(unittest.TestCase):
         self.assertEqual(parsed[1][3], "comparison-model / high")
         self.assertEqual(parsed[0][2], "$0.00")
         self.assertEqual(parsed[1][2], "$0.00")
-        self.assertEqual(parsed[0][9:11], ["100 (70.00% cached)", "20"])
-        self.assertEqual(parsed[1][9:11], ["100 (70.00% cached)", "20"])
+        self.assertEqual(parsed[0][9:11], ["100 (70.00%)", "20"])
+        self.assertEqual(parsed[1][9:11], ["100 (70.00%)", "20"])
         self.assertEqual(parsed[0][6:8], ["2", "1"])
         self.assertEqual(parsed[1][6:8], ["3", "1"])
         self.assertEqual(parsed[1][8], f"{stats['tokens']['total_tokens']:,}")
@@ -378,7 +378,7 @@ class FinalizationTests(unittest.TestCase):
         upgraded = path.read_text()
         self.assertEqual(upgraded.count("<!-- agentscumm:benchmark:"), 1)
         self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
-        usage = "| 100 (70.00% cached) | 20 |"
+        usage = "| 100 (70.00%) | 20 |"
         self.assertIn(usage, upgraded)
         self.assertIn("| Synthetic Game | $0.00 |", upgraded)
         self.assertIn("Editorial note preserved.", upgraded)
@@ -402,7 +402,7 @@ class FinalizationTests(unittest.TestCase):
         upgraded = FINAL.upgrade_benchmark_table(original)
         self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
         self.assertIn("| Example | $0.25 |", upgraded)
-        self.assertIn("| 1,300 (61.54% cached) | 20 | 2000-01-01 |", upgraded)
+        self.assertIn("| 1,300 (61.54%) | 20 | 2000-01-01 |", upgraded)
         self.assertIn("| 0 (N/A) | 0 | 2000-01-02 |", upgraded)
         self.assertIn("| Unknown | 20 | 2000-01-03 |", upgraded)
         self.assertNotIn(FINAL.PREVIOUS_BENCHMARK_PRICING_NOTES, upgraded)
@@ -420,7 +420,7 @@ class FinalizationTests(unittest.TestCase):
         upgraded = FINAL.upgrade_benchmark_table(original)
         self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
         self.assertIn(f"| ✅ | Example | $0.25 | test-model | Yes | 00:01:00 | 4 | 2 {marker} | "
-                      "1,320 | 1,300 (61.54% cached) | 20 | 2000-01-01 |", upgraded)
+                      "1,320 | 1,300 (61.54%) | 20 | 2000-01-01 |", upgraded)
         self.assertNotIn("Standard assumed", upgraded)
         self.assertNotIn("2000-01-02", upgraded)
         self.assertIn("Editorial note retained.", upgraded)
@@ -436,15 +436,26 @@ class FinalizationTests(unittest.TestCase):
         upgraded = FINAL.upgrade_benchmark_table(original)
         self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
         self.assertIn("| Example | $0.25 | test-model | Yes | 00:01:00 | 4 | 2 | "
-                      "1,320 | 1,300 (76.92% cached) | 20 | 2000-01-01 |", upgraded)
+                      "1,320 | 1,300 (76.92%) | 20 | 2000-01-01 |", upgraded)
         self.assertIn("| 100 (Unknown) | 20 | 2000-01-02 |", upgraded)
+        self.assertEqual(FINAL.upgrade_benchmark_table(upgraded), upgraded)
+
+    def test_inline_cache_table_moves_cached_label_to_header(self):
+        original = "\n".join([
+            FINAL.INLINE_CACHE_BENCHMARK_HEADER,
+            FINAL.BENCHMARK_SEPARATOR,
+            "| ✅ | Example | $0.25 | test-model | Yes | 00:01:00 | 4 | 2 | 120 | 100 (70.00% cached) | 20 | 2000-01-01 |",
+        ])
+        upgraded = FINAL.upgrade_benchmark_table(original)
+        self.assertIn("| Input tokens (% cached) | Output tokens |", upgraded)
+        self.assertIn("| 120 | 100 (70.00%) | 20 | 2000-01-01 |", upgraded)
         self.assertEqual(FINAL.upgrade_benchmark_table(upgraded), upgraded)
 
     def test_benchmark_cost_rounds_to_cents_and_distinguishes_missing_price(self):
         self.source(fixture())
         _, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo)
         stats.pop("api_cost")
-        self.assertEqual(FINAL.benchmark_usage(stats), ["100 (70.00% cached)", "20", "Unknown"])
+        self.assertEqual(FINAL.benchmark_usage(stats), ["100 (70.00%)", "20", "Unknown"])
         stats["api_cost"] = {"status": "unavailable", "total_api_price_usd": None}
         self.assertEqual(FINAL.benchmark_usage(stats)[-1], "Unknown")
         stats["api_cost"] = {"status": "priced", "total_api_price_usd": "0"}
