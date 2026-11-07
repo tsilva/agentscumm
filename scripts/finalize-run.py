@@ -31,7 +31,8 @@ PREVIOUS_BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | --
 SEPARATE_CACHE_BENCHMARK_HEADER = "| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Tokens | Input tokens | Output tokens | Cached input tokens (% of input) | Date (UTC) |"
 SEPARATE_CACHE_BENCHMARK_SEPARATOR = "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
 INLINE_CACHE_BENCHMARK_HEADER = "| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Tokens | Input tokens | Output tokens | Date (UTC) |"
-BENCHMARK_HEADER = INLINE_CACHE_BENCHMARK_HEADER.replace("| Input tokens |", "| Input tokens (% cached) |")
+PERCENTAGE_BENCHMARK_HEADER = INLINE_CACHE_BENCHMARK_HEADER.replace("| Input tokens |", "| Input tokens (% cached) |")
+BENCHMARK_HEADER = PERCENTAGE_BENCHMARK_HEADER.replace("| Tokens |", "| Total tokens |")
 BENCHMARK_SEPARATOR = "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
 BENCHMARK_NOTES = ("✅ marks a completed archive. Unfinished runs show the verified milestone count and latest milestone when available. "
                    "Otherwise they show a declared estimate or Unknown. "
@@ -193,9 +194,12 @@ def upgrade_benchmark_table(text, stats=None):
     lines = text.splitlines(keepends=True)
     headers = [i for i, line in enumerate(lines) if line.strip() in (
         LEGACY_BENCHMARK_HEADER, PREVIOUS_BENCHMARK_HEADER, ANNOTATED_BENCHMARK_HEADER,
-        SEPARATE_CACHE_BENCHMARK_HEADER, INLINE_CACHE_BENCHMARK_HEADER, BENCHMARK_HEADER)]
+        SEPARATE_CACHE_BENCHMARK_HEADER, INLINE_CACHE_BENCHMARK_HEADER, PERCENTAGE_BENCHMARK_HEADER,
+        BENCHMARK_HEADER)]
     require(len(headers) <= 1, "Multiple benchmark comparison tables; resolve before registration")
-    if headers and lines[headers[0]].strip() != BENCHMARK_HEADER:
+    if headers and lines[headers[0]].strip() == PERCENTAGE_BENCHMARK_HEADER:
+        lines[headers[0]] = BENCHMARK_HEADER + "\n"
+    elif headers and lines[headers[0]].strip() != BENCHMARK_HEADER:
         position = headers[0]
         header = lines[position].strip()
         legacy = header == LEGACY_BENCHMARK_HEADER

@@ -1,6 +1,6 @@
 # Benchmarks
 
-| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Tokens | Input tokens (% cached) | Output tokens | Date (UTC) |
+| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Total tokens | Input tokens (% cached) | Output tokens | Date (UTC) |
 | --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | ✅ | Flight of the Amazon Queen | $46.77 | gpt-6.1-sol / high | Yes | 16:51:19 | 8,530 | 950 <!-- agentscumm:benchmark:ea00d2f2c82e3fea5333a08d1bc4545f366f058d045dde0bc20aaf785bec2e81 --> | 234,994,829 | 234,782,913 (99.10%) | 211,916 | 2026-11-06 |
 | ✅ | Indiana Jones and the Last Crusade | $30.71 | gpt-6.1-sol / high | Yes | 07:28:13 | 2,769 | 547 <!-- agentscumm:benchmark:0004e66106b7c5f0aacb7614317897c1c8b529b183cdca196c41e5196f7d56b3 --> | 191,022,061 | 190,934,079 (99.35%) | 87,982 | 2026-11-07 |

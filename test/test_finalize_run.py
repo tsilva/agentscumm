@@ -451,6 +451,14 @@ class FinalizationTests(unittest.TestCase):
         self.assertIn("| 120 | 100 (70.00%) | 20 | 2000-01-01 |", upgraded)
         self.assertEqual(FINAL.upgrade_benchmark_table(upgraded), upgraded)
 
+    def test_tokens_header_is_renamed_without_changing_rows(self):
+        row = "| ✅ | Example | $0.25 | test-model | Yes | 00:01:00 | 4 | 2 | 120 | 100 (70.00%) | 20 | 2000-01-01 |\n"
+        original = FINAL.PERCENTAGE_BENCHMARK_HEADER + "\n" + FINAL.BENCHMARK_SEPARATOR + "\n" + row
+        upgraded = FINAL.upgrade_benchmark_table(original)
+        self.assertIn("| Total tokens | Input tokens (% cached) |", upgraded)
+        self.assertEqual(upgraded.splitlines(keepends=True)[2], row)
+        self.assertEqual(FINAL.upgrade_benchmark_table(upgraded), upgraded)
+
     def test_benchmark_cost_rounds_to_cents_and_distinguishes_missing_price(self):
         self.source(fixture())
         _, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo)
