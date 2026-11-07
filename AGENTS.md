@@ -47,3 +47,10 @@ own visible AgentSCUMM spectator window; hidden trials are not valid comparisons
 ## Price a conversation
 
 Use [$agentscumm_price-thread](.agents/skills/agentscumm_price-thread/SKILL.md) to evaluate a Codex conversation's recorded token usage and calculate its hypothetical OpenAI API cost with the models actually used and current official rates. Its display name is `agentscumm: Price Thread`. This read-only analysis is separate from gameplay and requires no model API key. Report the usage cutoff, cache breakdown, context bands, and any processing-tier assumption; missing telemetry or pricing must remain explicit.
+
+## Author a game internals map
+
+Use [$agentscumm_game-internals-map-author](.agents/skills/agentscumm_game-internals-map-author/SKILL.md)
+when the user asks to add or expand a map under `src/game-internals/`.
+Trace native room IDs, variables, flags, and objects to the target edition and
+verify the milestone rules through the evaluator.

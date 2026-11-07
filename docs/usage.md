@@ -21,7 +21,7 @@ at a ScummWEB build with the telemetry query API. AgentSCUMM requests
 `?telemetry=1` when launching a game through `session`.
 Call the read-only `telemetry` tool with its `session_id` to get the detected
 game identity, current room where the engine exposes one, and available bank
-names and lengths. The tool works independently of progress maps.
+names and lengths. The tool works independently of game internals maps.
 
 To read a bank, supply its name and optionally a zero-based `offset` and
 `limit`. For example, after discovering a `script_vars` bank, call
@@ -137,9 +137,10 @@ Use the pinned runtime and game data when interpreting slot numbers.
 
 ### Story progress
 
-Games with a progress map record changes in their private session log for
-[benchmark export](run-archives.md). Evaluator-enabled launches also include
-`progress` in private telemetry snapshots and result receipts.
+Games with a [game internals map](development.md#game-internals-maps) record
+milestone changes in their private session log for [benchmark export](run-archives.md).
+Evaluator-enabled launches also include `progress` in private telemetry
+snapshots and result receipts.
 
 | Game | Verified edition | Milestones |
 | --- | --- | ---: |

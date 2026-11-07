@@ -61,7 +61,7 @@ export async function loadGameProgress(game) {
   slug.parse(game);
   let source;
   try {
-    source = await readFile(new URL(`./progress-maps/${game}.yaml`, import.meta.url), 'utf8');
+    source = await readFile(new URL(`./game-internals/${game}.yaml`, import.meta.url), 'utf8');
   } catch (error) {
     if (error.code === 'ENOENT') return;
     throw error;
@@ -71,7 +71,7 @@ export async function loadGameProgress(game) {
   for (const milestone of map.milestones) {
     const { id, when } = milestone;
     if (map.game !== game || ids.has(id) || leaves(when).some(rule => rule.milestone && !ids.has(rule.milestone))) {
-      throw new Error(`Invalid game, milestone ID or milestone reference in progress map: ${game}`);
+      throw new Error(`Invalid game, milestone ID or milestone reference in game internals map: ${game}`);
     }
     milestone.when = resolveReferences(when, map, id);
     ids.add(id);
@@ -83,7 +83,7 @@ function resolveReferences(rule, map, milestone) {
   const lookup = (section, label) => {
     const entries = map[section];
     if (!entries || !Object.hasOwn(entries, label)) {
-      throw new Error(`Unknown ${section.slice(0, -1)} "${label}" in milestone "${milestone}" for progress map: ${map.game}`);
+      throw new Error(`Unknown ${section.slice(0, -1)} "${label}" in milestone "${milestone}" for game internals map: ${map.game}`);
     }
     return entries[label];
   };
@@ -97,7 +97,7 @@ function resolveReferences(rule, map, milestone) {
     const { variable, ...condition } = rule;
     const slot = lookup('variables', variable);
     if ('key' in slot && map.telemetry !== 'snapshot') {
-      throw new Error(`Variable "${variable}" in progress map ${map.game} requires snapshot telemetry`);
+      throw new Error(`Variable "${variable}" in game internals map ${map.game} requires snapshot telemetry`);
     }
     return { ...slot, ...condition };
   }

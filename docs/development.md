@@ -31,7 +31,14 @@ suite with `node --test --test-concurrency=1 test/*.test.js`, then
 arrival timing of a real game; verify that through MCP against the pinned native
 provider before treating a new endpoint as a benchmark.
 
-The evaluator loads `src/progress-maps/<game-slug>.yaml` for the launched slug.
+## Game internals maps
+
+Each game internals map names engine-specific rooms, variables, flags, and
+objects and defines milestone rules over that state. The evaluator loads
+`src/game-internals/<game-slug>.yaml` for the launched game. Use the
+[`agentscumm_game-internals-map-author` skill](../.agents/skills/agentscumm_game-internals-map-author/SKILL.md)
+to research and author maps.
+
 Define `schema_version: 1`, `game`, `engine_id`,
 and ordered `milestones` with unique IDs and display labels. In the optional
 `rooms` mapping, assign a native room ID to each room label, such as
@@ -66,8 +73,10 @@ Verify rules against the target edition and test restores,
 alternate paths, and the live ending before adding a completion milestone.
 Mapped games record milestone changes in their private session logs for
 benchmark export. Progress tracking runs independently of stop conditions.
-Draft maps in `src/progress-maps/drafts/` are research configs outside runtime
+Draft maps in `src/game-internals/drafts/` are research configs outside runtime
 scoring. They can describe predicates that still need provider or evaluator support.
+
+## Runtime and verification
 
 `pnpm test:live` launches Flight of the Amazon Queen on the configured live site through stdio MCP, opens the spectator, checks screenshot dimensions, exercises click/key/wait sequences and retry behavior, and retrieves frame history. It uses an isolated temporary profile and closes its browser processes afterward. It does not solve the game. Local verification captures stay under ignored `.internal/`.
 
