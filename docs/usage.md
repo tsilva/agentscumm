@@ -139,25 +139,24 @@ Use the pinned runtime and game data when interpreting slot numbers.
 
 Games with a progress map record changes in their private session log for
 [benchmark export](run-archives.md). Evaluator-enabled launches also include
-`progress` in private telemetry snapshots and result receipts. Flight of the Amazon Queen
-has seven milestones for the English DOS talkie edition. Six are game variables
-and the seventh is room 110, the start of the ending credits. The credits are
-observed during a cutaway, so the rule accepts `room_ready: false`.
+`progress` in private telemetry snapshots and result receipts.
 
-The Last Crusade map tracks seven milestones for the English Amiga edition.
-The final milestone requires the surviving ending outcome at the credits.
+| Game | Verified edition | Milestones |
+| --- | --- | ---: |
+| Flight of the Amazon Queen | English DOS talkie | 24 |
+| Indiana Jones and the Last Crusade | English Amiga | 20 |
+| Indiana Jones and the Fate of Atlantis | English DOS CD | 22 |
+| DreamWeb | English DOS CD | 15 |
+| Beneath a Steel Sky | English DOS CD | 28 |
 
-The Fate of Atlantis map tracks seven milestones for the English DOS CD
-edition. The Team, Wits, and Fists routes share the same score. The final
-milestone requires the escape flag and arrival at the ending scene.
-
-The DreamWeb map tracks seven milestones using the engine's story flags and
-current location. The final milestone detects the winning branch of the
-subway confrontation.
+These maps count milestones up to the furthest confirmed stage, including when
+a route bypasses an earlier checkpoint. Fate of Atlantis uses the same scale
+for the Team, Wits, and Fists routes. Completion checks distinguish the
+winning endings from game-over scenes.
 
 Progress includes the count, total, rounded percentage, and furthest milestone
 reached in map order. A restored save rebuilds the score from its current
-variables and room.
+variables and room. Run archives retain the milestone total used during play.
 Each milestone counts once on that save timeline. When the runtime lacks the
 required variables, progress is reported as unavailable. This percentage counts
 story milestones and does not estimate time remaining.

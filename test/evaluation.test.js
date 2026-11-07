@@ -55,18 +55,18 @@ test('Queen progress follows the active save and reaches 100% on the credits cut
   await evaluation.beginSession(queenSlug);
   const six = [[3, 1], [101, 1], [123, 2], [41, 2], [67, 2], [105, 1]];
   evaluation.accept({ current: state(67, 2), events: [], gameVariableEvents: [progressBaseline(1, six)] });
-  assert.equal(evaluation.progress.completed, 6);
-  assert.equal(evaluation.progress.percent, 86);
+  assert.equal(evaluation.progress.completed, 23);
+  assert.equal(evaluation.progress.percent, 96);
   evaluation.accept({ current: state(70, 4), events: [], gameVariableEvents: [progressBaseline(3)] });
   assert.deepEqual(evaluation.progress.reached, []);
   const crossing = { event: 'game_variables_change', native_time_ms: 5,
     bank: 'game_state', index: 101, previous: 0, value: 1 };
   evaluation.accept({ current: state(21, 7), events: [],
     gameVariableEvents: [crossing, { ...crossing, native_time_ms: 6, previous: 1, value: 0 }] });
-  assert.deepEqual(evaluation.progress.reached, ['jungle-crossing']);
+  assert.equal(evaluation.progress.reached.at(-1), 'jungle-crossing');
   evaluation.accept({ current: state(67, 9), events: [], gameVariableEvents: [progressBaseline(8, six)] });
   evaluation.accept({ current: state(111, 11), events: [state(110, 10, false)], gameVariableEvents: [] });
-  assert.equal(evaluation.result.progress.completed, 7);
+  assert.equal(evaluation.result.progress.completed, 24);
   assert.equal(evaluation.result.progress.percent, 100);
   assert.equal(evaluation.result.variables.room_ready, false);
 });
@@ -78,7 +78,7 @@ test('progress stays unavailable without a bank and a stop ignores later room re
   assert.equal(evaluation.progress.reason, 'missing_game_variables');
   evaluation.accept({ current: state(110, 5, false), events: [state(71, 4)],
     gameVariableEvents: [progressBaseline(2, [[3, 1]])] });
-  assert.deepEqual(evaluation.result.progress.reached, ['hotel-escape']);
+  assert.equal(evaluation.result.progress.reached.at(-1), 'hotel-escape');
   assert.equal(evaluation.result.variables.room_id, 71);
 
   const newSession = new RunEvaluation();
@@ -108,19 +108,19 @@ test('Last Crusade scores the credits by outcome and rebuilds progress on restor
   accept(82, 1, [baseline(1)], { ...identity, index_md5: '0'.repeat(32) });
   assert.equal(evaluation.progress.reason, 'edition_mismatch');
   accept(82, 2, [baseline(2)]);
-  assert.equal(evaluation.progress.completed, 6);
+  assert.equal(evaluation.progress.completed, 19);
   accept(94, 3, [outcome(3, 0, 2)]);
-  assert.equal(evaluation.progress.completed, 6);
+  assert.equal(evaluation.progress.completed, 19);
   accept(82, 4, [outcome(4, 2, 4)]);
-  assert.equal(evaluation.progress.completed, 6, 'An outcome update must not match the previous credits room');
+  assert.equal(evaluation.progress.completed, 19, 'An outcome update must not match the previous credits room');
   accept(94, 5, []);
-  assert.equal(evaluation.progress.completed, 7);
+  assert.equal(evaluation.progress.completed, 20);
   assert.equal(evaluation.progressTracker.nextMilestone, null);
   globals.fill(0);
   objects[156] = 1;
   accept(22, 6, [baseline(6)]);
-  assert.equal(evaluation.progress.completed, 2);
-  assert.equal(evaluation.progressTracker.nextMilestone, 'Got Henry out of his cell');
+  assert.equal(evaluation.progress.completed, 7);
+  assert.equal(evaluation.progressTracker.nextMilestone, 'Got inside Castle Brunwald');
   objects[156] = 0;
   accept(22, 7, [baseline(7)]);
   assert.equal(evaluation.progress.completed, 0);
@@ -128,7 +128,14 @@ test('Last Crusade scores the credits by outcome and rebuilds progress on restor
     { event: 'game_variables_change', native_time_ms: 8, bank: 'object_state', index: 156, previous: 0, value: 1 },
     { event: 'game_variables_change', native_time_ms: 9, bank: 'object_state', index: 156, previous: 1, value: 0 },
   ]);
-  assert.equal(evaluation.progress.completed, 2, 'A bank-only branch can match between room samples');
+  assert.equal(evaluation.progress.completed, 7, 'A bank-only branch can match between room samples');
+  globals[93] = 0x4200;
+  globals[95] = 0x0001;
+  accept(84, 11, [baseline(11)]);
+  assert.equal(evaluation.progress.reached.at(-1), 'passed-first-trial');
+  globals[95] |= 0x0002;
+  accept(85, 12, [baseline(12)]);
+  assert.equal(evaluation.progress.reached.at(-1), 'passed-second-trial');
 });
 
 test('Fate of Atlantis tracks shared milestones and requires the surviving ending', async () => {
@@ -136,9 +143,10 @@ test('Fate of Atlantis tracks shared milestones and requires the surviving endin
   await evaluation.beginSession('indiana-jones-and-the-fate-of-atlantis');
   const identity = { engine_id: 'scumm', game_id: 'atlantis', index_md5: '182344899c2e2998fca0bebcd82aa81a' };
   const bits = Array(81).fill(0);
-  const objects = Array(583).fill(0);
+  const objects = Array(937).fill(0);
+  const globals = Array(239).fill(0);
   const baseline = native_time_ms => ({ event: 'game_variables_baseline', native_time_ms,
-    banks: { scumm_bit_bytes: bits, object_state: objects } });
+    banks: { scumm_bit_bytes: bits, object_state: objects, scumm_vars: globals } });
   function accept(room, time, gameVariableEvents = [], game = identity) {
     evaluation.accept({ identity: game, current: { ...state(room, time, false), engine_id: 'scumm' },
       events: [], gameVariableEngine: 'scumm', gameVariableEvents });
@@ -154,24 +162,34 @@ test('Fate of Atlantis tracks shared milestones and requires the surviving endin
   bits[26] = 0x14;
   accept(1, 4, [baseline(4)]);
   assert.equal(evaluation.progress.latest_milestone, "Read Plato's Lost Dialogue");
+  globals[238] = 2;
+  accept(1, 4.5, [baseline(4.5)]);
+  assert.equal(evaluation.progress.reached.at(-1), 'chose-story-path');
   accept(51, 5);
   assert.equal(evaluation.progress.latest_milestone, 'Entered the Crete Labyrinth');
   accept(48, 6);
-  assert.equal(evaluation.progress.completed, 4);
+  assert.equal(evaluation.progress.reached.at(-1), 'atlantis');
   objects[582] = 1;
-  accept(94, 7, [baseline(7)]);
-  assert.equal(evaluation.progress.completed, 4, 'Restoring past the entrance retains credit for reaching Atlantis');
+  accept(98, 7, [baseline(7)]);
+  assert.equal(evaluation.progress.reached.at(-1), 'opened-airlock', 'The airlock exit persists across saves');
+  accept(46, 7.5);
+  assert.equal(evaluation.progress.reached.at(-1), 'canal');
+  accept(94, 7.75);
+  assert.equal(evaluation.progress.reached.at(-1), 'middle-ring');
   accept(55, 8);
-  assert.equal(evaluation.progress.completed, 5);
+  assert.equal(evaluation.progress.reached.at(-1), 'inner-ring');
   accept(23, 9);
-  assert.equal(evaluation.progress.completed, 6);
+  assert.equal(evaluation.progress.reached.at(-1), 'colossus');
+  objects[264] = 3;
+  accept(23, 9.5, [baseline(9.5)]);
+  assert.equal(evaluation.progress.reached.at(-1), 'loaded-god-machine-disks');
   accept(24, 10);
-  assert.equal(evaluation.progress.completed, 6, 'Death retains prior progress');
+  assert.equal(evaluation.progress.completed, 21, 'Death retains prior progress');
   accept(96, 11);
-  assert.equal(evaluation.progress.completed, 6, 'The ending room alone cannot grant completion');
+  assert.equal(evaluation.progress.completed, 21, 'The ending room alone cannot grant completion');
   accept(25, 12, [{ event: 'game_variables_change', native_time_ms: 12,
     bank: 'scumm_bit_bytes', index: 4, previous: 0, value: 0x10 }]);
-  assert.equal(evaluation.progress.completed, 6, 'Starting the escape cannot grant completion');
+  assert.equal(evaluation.progress.completed, 21, 'Starting the escape cannot grant completion');
   accept(96, 13);
   assert.equal(evaluation.progress.percent, 100);
   assert.equal(evaluation.progressTracker.nextMilestone, null);
@@ -180,13 +198,19 @@ test('Fate of Atlantis tracks shared milestones and requires the surviving endin
   objects.fill(0);
   accept(68, 14, [baseline(14)]);
   assert.equal(evaluation.progress.completed, 0);
+  accept(66, 15);
+  assert.equal(evaluation.progress.reached.at(-1), 'dived-toward-atlantis');
+  accept(82, 16, [baseline(16)]);
+  assert.equal(evaluation.progress.reached.at(-1), 'dived-toward-atlantis');
 });
 
 test('DreamWeb scores keyed snapshots and rebuilds progress after a restore', async () => {
   const evaluation = new RunEvaluation();
   await evaluation.beginSession('dreamweb');
   const identity = { engine_id: 'dreamweb', game_id: 'dreamweb' };
-  const start = { rockstarDead: 0, generalDead: 0, sartainDead: 0, aideDead: 0,
+  const start = { beenMugged: 0, talkedToSparky: 0, card1Money: 0, talkedToAttendant: 0,
+    talkedToBoss: 0, gunPassFlag: 0, talkedToRecep: 0, cardPassFlag: 0,
+    rockstarDead: 0, generalDead: 0, sartainDead: 0, aideDead: 0,
     canMoveAltar: 0, manDead: 0, madmanFlag: 0 };
   let sampleTime = 0;
   const accept = (room_id, vars) => evaluation.accept({ current: null, events: [],
@@ -197,19 +221,83 @@ test('DreamWeb scores keyed snapshots and rebuilds progress after a restore', as
   assert.equal(evaluation.progress.reason, 'missing_game_variables');
   accept(0, start);
   assert.equal(evaluation.progress.completed, 0);
+  const funded = { ...start, beenMugged: 1, talkedToSparky: 1, card1Money: 12432 };
+  accept(8, funded);
+  assert.equal(evaluation.progress.completed, 3);
+  const paid = { ...funded, talkedToAttendant: 1, talkedToBoss: 1, gunPassFlag: 1, card1Money: 10432 };
+  accept(23, paid);
+  assert.equal(evaluation.progress.completed, 5, 'Payment precedes the gun release');
+  accept(0, { ...paid, gunPassFlag: 2, talkedToRecep: 1, cardPassFlag: 1 });
+  assert.equal(evaluation.progress.completed, 7, 'Payment precedes the hotel keycard');
+  accept(0, { ...paid, gunPassFlag: 2, talkedToRecep: 1, cardPassFlag: 2, card1Money: 2132 });
+  assert.equal(evaluation.progress.completed, 8);
   accept(24, { ...start, rockstarDead: 1, generalDead: 2, sartainDead: 2 });
-  assert.equal(evaluation.progress.completed, 3, 'Aftermath states still count as completed targets');
+  assert.equal(evaluation.progress.completed, 11, 'Aftermath states still count as completed targets');
   const altar = { ...start, rockstarDead: 1, generalDead: 2, sartainDead: 2, aideDead: 1, canMoveAltar: 1 };
   accept(9, altar);
-  assert.equal(evaluation.progress.completed, 5);
+  assert.equal(evaluation.progress.completed, 13);
   accept(14, { ...altar, manDead: 2 });
-  assert.equal(evaluation.progress.completed, 6);
+  assert.equal(evaluation.progress.completed, 14);
   accept(14, { ...altar, madmanFlag: 1 });
   assert.equal(evaluation.progress.percent, 100);
   accept(9, altar);
-  assert.equal(evaluation.progress.completed, 5, 'Loading before the subway drops credit for later milestones');
+  assert.equal(evaluation.progress.completed, 13, 'Loading before the subway drops credit for later milestones');
   accept(0, start);
   assert.equal(evaluation.progress.completed, 0);
+});
+
+test('Beneath a Steel Sky scores saved script variables and the winning credits room', async () => {
+  const evaluation = new RunEvaluation();
+  await evaluation.beginSession('beneath-a-steel-sky');
+  const identity = { engine_id: 'sky', game_id: 'sky' };
+  const vars = Array(838).fill(0);
+  let sampleTime = 0;
+  const accept = (room_id, completed, changes = {}, message) => {
+    Object.assign(vars, changes);
+    evaluation.accept({ current: null, events: [],
+      progressTelemetry: { identity, snapshot: { schema_version: 1, room_id,
+        sample_time_ms: ++sampleTime, banks: { script_vars: [...vars] } } } });
+    assert.equal(evaluation.progress.completed, completed, message);
+  };
+
+  accept(0, 0, { 640: 1 });
+  assert.equal(evaluation.progress.total, 28);
+  accept(2, 1, { 125: 42 });
+  accept(4, 2, { 420: 42 });
+  accept(12, 3, { 440: 42 });
+  accept(7, 4, { 268: 42 }, 'Cutting the cable leaves it to be picked up');
+  accept(29, 5, { 268: 69 });
+  accept(14, 6, { 451: 42 });
+  accept(14, 6, { 258: 1 }, 'A promised jammer is still pending');
+  accept(14, 7, { 258: 42 });
+  accept(10, 8, { 335: 42 });
+  accept(26, 8, { 256: 1 }, 'Arranging surgery leaves the port uninstalled');
+  accept(26, 9, { 256: 42 });
+  accept(92, 9, { 515: 24828, 519: 24829, 523: 24643 }, 'All three documents must be decrypted');
+  accept(92, 10, { 523: 24830 });
+  accept(10, 11, { 480: 1 });
+  accept(31, 12, { 348: 1 });
+  accept(26, 13, { 787: 42 });
+  accept(40, 14, { 822: 1 });
+  accept(37, 15, { 810: 1, 813: 1 }, 'Loosening the grille leaves the passage closed');
+  accept(65, 16, { 813: 2 });
+  accept(67, 17, { 681: 1 });
+  accept(72, 18, { 698: 1 });
+  accept(73, 19, { 703: 1 });
+  accept(73, 20, { 702: 1 });
+  accept(94, 21, { 640: 0 });
+  accept(95, 22, { 641: 1 });
+  accept(74, 23, { 642: 1 });
+  accept(76, 24, { 713: 1 });
+  accept(76, 25, { 714: 1 });
+  accept(80, 26, { 719: 2, 707: 1 }, 'Infected tissue still needs to be applied to LINC');
+  accept(81, 27, { 707: 2 });
+  accept(82, 27);
+  accept(102, 27, {}, 'The death screen does not complete the game');
+  accept(85, 28);
+  assert.equal(evaluation.progress.percent, 100);
+  vars.fill(0);
+  accept(4, 2, { 125: 42, 420: 42, 640: 1 }, 'Restoring an earlier save rebuilds the score');
 });
 
 test('game variable transitions ignore restored values and retain the matching snapshot', () => {
@@ -297,15 +385,16 @@ test('normal play logs progress and updates the spectator footer', { timeout: 20
     const progress = document.getElementById('story-progress');
     return !progress.hidden && progress.textContent === expected;
   }, text);
-  await expectFooter('0% · Next: Reached the crash site');
+  await expectFooter('0% · Next: Secured the sheet rope to the radiator');
   await runtime.act({ session_id: sessionId, request_id: 'first-milestone',
     actions: [{ type: 'click', x: 50, y: 50 }] });
-  await expectFooter('14% · Next: Opened the jungle river crossing');
+  await expectFooter('13% · Next: Distracted the piranhas');
   const rows = (await readFile(path.join(dataDir, 'runs', `${sessionId}.jsonl`), 'utf8')).trim().split('\n').map(JSON.parse);
   const samples = rows.filter(row => row.type === 'progress');
   assert.ok(samples.every(row => row.sessionId === sessionId));
-  assert.deepEqual(samples.at(-1).progress, { game: queenSlug, total: 7, state: 'tracked',
-    completed: 1, percent: 14, latest_milestone: 'Reached the crash site', reached: ['hotel-escape'] });
+  assert.deepEqual(samples.at(-1).progress, { game: queenSlug, total: 24, state: 'tracked',
+    completed: 3, percent: 13, latest_milestone: 'Reached the crash site',
+    reached: ['secured-sheet-rope', 'lola-help', 'hotel-escape'] });
   assert.equal(runtime.status().phase, 'ready');
   assert.doesNotMatch(JSON.stringify(runtime.status()), /latest_milestone|nextMilestone|game_state|room_id/);
 
@@ -316,7 +405,7 @@ test('normal play logs progress and updates the spectator footer', { timeout: 20
   await publish(progressBaseline(0, [[3, 1], [101, 1], [123, 2], [41, 2], [67, 2], [105, 1]]), state(110, 0, false));
   await expectFooter('100%');
   await publish(progressBaseline(0), state(70, 0));
-  await expectFooter('0% · Next: Reached the crash site');
+  await expectFooter('0% · Next: Secured the sheet rope to the radiator');
   await runtime.closeGame();
   await viewer.locator('#story-progress').waitFor({ state: 'hidden' });
 });

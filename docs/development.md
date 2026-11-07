@@ -56,6 +56,12 @@ took a route that bypassed them.
 Maps with `telemetry: snapshot` evaluate the latest native snapshot and can
 bind a variable with `{ bank, key }` for a named telemetry bank entry. Use
 markers that persist in saves to retain credit when a player leaves a room.
+Cover each chapter as thoroughly as the native state allows. Trace named
+variables, flags, object states, and room IDs to the scripts that change them.
+Add a checkpoint for each distinct puzzle or story outcome the evidence
+supports. Check the starting values, intermediate values, and later writes
+before selecting a predicate. Combine equivalent outcomes for alternate
+routes into one stage.
 Verify rules against the target edition and test restores,
 alternate paths, and the live ending before adding a completion milestone.
 Mapped games record milestone changes in their private session logs for
