@@ -127,6 +127,49 @@ class FinalizationTests(unittest.TestCase):
         self.assertEqual(stats["source"]["records"], len(finished))
         self.assertNotIn("Later private follow-up", (Path(state["archive"]) / "trajectory.jsonl").read_text())
 
+    def test_regenerated_archive_counts_local_actions_and_refreshes_benchmark(self):
+        self.source(fixture(complete=True))
+        previous = FINAL.finalize(self.request)
+        archive = Path(previous["archive"])
+        original = FINAL.EXPORT.verify_run(archive)
+        archive.rename(self.work / "previous-archive")
+
+        local_session = "33333333-3333-4333-8333-333333333333"
+        foreign_session = "44444444-4444-4444-8444-444444444444"
+        profile = str(self.work / "browser")
+        def event(second, request, result):
+            return {"timestamp": record("unused", {}, second)["timestamp"], "request": request, "result": result}
+
+        def status(session, game):
+            return event(1, {"name": "status"}, {"name": "status", "content": [
+                {"sessionId": session, "game": game, "dataDir": profile}]})
+
+        def act(second, session=local_session):
+            return event(second, {"name": "act", "arguments": {"session_id": session, "request_id": "local",
+                         "actions": [{"type": "wait"}, {"type": "key"}, {"type": "screenshot"}]}},
+                         {"name": "act", "isError": True})
+
+        before = {**act(0), "timestamp": "2026-11-05T11:59:59Z"}
+        rows = [before, status(local_session, "synthetic-game"), status(foreign_session, "other-game"),
+                act(2, foreign_session), act(3), act(4), act(8)]
+        (self.work / "events.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows) + '{"partial":')
+
+        state = FINAL.finalize(self.request)
+        self.assertFalse(state["benchmark_added"])
+        stats = FINAL.EXPORT.verify_run(archive)
+        self.assertEqual(stats["trajectory"], original["trajectory"])
+        self.assertEqual(stats["local_mcp_action_sequences"], 2)
+        self.assertEqual(stats["actions"], {"click": 1, "wait": 3, "key": 2, "screenshot": 2})
+        self.assertEqual(stats["total_actions"], 8)
+        self.assertEqual(stats["total_action_sequences"], 3)
+        self.assertEqual(stats["action_sequences"]["mean_length"], 8 / 3)
+        self.assertEqual(stats["sessions"], sorted([SESSION, local_session]))
+        benchmark = (self.repo / "BENCHMARKS.md").read_text()
+        self.assertEqual(benchmark.count(stats["trajectory"]["sha256"]), 1)
+        self.assertIn("| 8 | 3 <!-- agentscumm:benchmark:", benchmark)
+        self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
+        self.assertEqual((self.repo / "BENCHMARKS.md").read_text(), benchmark)
+
     def test_wrong_turn_timeout_and_aborted_turn_never_register_completion(self):
         self.source(fixture(complete=True))
         self.request["turn_id"] = "turn-that-never-finished"

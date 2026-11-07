@@ -165,23 +165,39 @@ def private_records(path):
                 yield json.loads(line)
 
 
-def local_runtime_session(repo, game, run_id, agent_context, started, end):
-    work = repo / ".internal" / game / run_id
-    if agent_context:
+def local_runtime_telemetry(repo, game, run_id, agent_context, work_dir, started, end):
+    root = repo / ".internal" / game
+    work = root / run_id
+    if work_dir is not None and Path(work_dir).absolute().parent == root:
+        work = Path(work_dir).absolute()
+    elif agent_context:
         context_work = Path(agent_context).absolute().parent
-        if context_work.parent == work.parent:
+        if context_work.parent == root:
             work = context_work
     latest = None
+    sessions, sequences = set(), []
     for event in private_records(work / "events.jsonl"):
-        result = event.get("result", {})
-        if result.get("name") not in ("session", "status") or result.get("isError"):
-            continue
         when = USAGE.timestamp(event["timestamp"])
-        if started <= when <= end:
+        if not started <= when <= end:
+            continue
+        result = event.get("result", {})
+        if result.get("name") in ("session", "status") and not result.get("isError"):
             session = runtime_session(runtime_objects(result))
-            if session and session[2] == work / "browser":
-                latest = when, session
-    return latest
+            if session and session[1:] == (game, work / "browser"):
+                sessions.add(session[0])
+                if latest is None or when > latest[0]:
+                    latest = when, session
+        request = event.get("request")
+        if not isinstance(request, dict) or request.get("name") != "act":
+            continue
+        args = request.get("arguments")
+        if not isinstance(args, dict):
+            continue
+        session_id, steps = args.get("session_id"), args.get("actions")
+        if (isinstance(session_id, str) and isinstance(steps, list)
+                and all(isinstance(step, dict) and isinstance(step.get("type"), str) for step in steps)):
+            sequences.append((session_id, [step["type"] for step in steps]))
+    return latest, sessions, [steps for session_id, steps in sequences if session_id in sessions]
 
 
 def verified_run_progress(active, game, started, end):
@@ -707,7 +723,7 @@ class Screenshots:
 
 def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress",
                completion_note=None, walkthroughs=(), skills=(), agent_context=None, estimated_progress=None,
-               pricing_rates=None):
+               pricing_rates=None, work_dir=None):
     require(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", game_id), "Invalid game ID")
     require(status in ("in_progress", "completed", "stopped", "blocked"), "Invalid run status")
     validate_progress(estimated_progress)
@@ -797,12 +813,16 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                 output.write(dump(screenshots.transform(record)) + "\n")
         require(not observed_games or observed_games == {game_id},
                 "Rollout contains a different game; select a single-game conversation")
+        local_session, local_sessions, local_sequences = local_runtime_telemetry(
+            Path(repo).resolve(), game_id, run_id, agent_context, work_dir, started, end)
+        sessions.update(local_sessions)
+        for steps in local_sequences:
+            sequence_lengths.append(len(steps))
+            actions.update(steps)
         progress = None
         if status != "completed":
-            local_session = local_runtime_session(Path(repo).resolve(), game_id, run_id, agent_context, started, end)
             if local_session and (not active_session or local_session[0] > active_session[0]):
                 active_session = local_session
-                sessions.add(local_session[1][0])
             progress = verified_run_progress(active_session, game_id, started, end)
         if status == "completed":
             require(last_task == "task_complete", "Conversation is still active or interrupted; cannot finalize")
@@ -866,6 +886,8 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
             stats["limitations"].append("AgentSCUMM's startup commit was not recorded for this run; the exporter checkout is not a substitute.")
         if progress:
             stats["verified_progress"] = progress
+        if local_sequences:
+            stats["local_mcp_action_sequences"] = len(local_sequences)
         write_json(staging / "run.json", stats)
         verify_run(staging)
         source.unlink()
@@ -906,6 +928,10 @@ def verify_run(directory):
                               ("total_action_sequences", stats["action_sequences"]["count"])):
             require(type(stats.get(key)) is int and stats[key] >= 0 and stats[key] == expected,
                     f"{key} count mismatch")
+    if "local_mcp_action_sequences" in stats:
+        local_count = stats["local_mcp_action_sequences"]
+        require(type(local_count) is int and 0 < local_count <= stats.get("total_action_sequences", 0),
+                "Invalid local MCP action sequence count")
     trajectory = directory / "trajectory.jsonl"
     require(not trajectory.is_symlink(), "Linked trajectory")
     require(hashlib.sha256(trajectory.read_bytes()).hexdigest() == stats["trajectory"]["sha256"],

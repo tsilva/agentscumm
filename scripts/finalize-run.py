@@ -128,6 +128,11 @@ def benchmark_status(stats):
     return f"~{estimate:g}%" if estimate is not None else "Unknown"
 
 
+def benchmark_actions(stats):
+    return [f"{stats.get('total_actions', sum(stats['actions'].values())):,}",
+            f"{stats.get('total_action_sequences', stats['action_sequences']['count']):,}"]
+
+
 def benchmark_entry(stats, title=None):
     digest = stats["trajectory"]["sha256"]
     require(re.fullmatch(r"[0-9a-f]{64}", digest), "Invalid trajectory checksum")
@@ -141,8 +146,7 @@ def benchmark_entry(stats, title=None):
         f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}",
         f"{stats['tokens']['total_tokens']:,}",
         *benchmark_usage(stats),
-        f"{stats.get('total_actions', sum(stats['actions'].values())):,}",
-        f"{stats.get('total_action_sequences', stats['action_sequences']['count']):,}",
+        *benchmark_actions(stats),
     ]
     # Keep the deduplication marker inside the row so Markdown renders one table.
     return "| " + " | ".join(public_text(value) for value in cells) + f" <!-- agentscumm:benchmark:{digest} --> |\n"
@@ -176,7 +180,8 @@ def upgrade_benchmark_table(text, stats=None):
             require(len(cells) == 13, "Invalid benchmark row")
             if stats.get("verified_progress") and cells[0] != "✅":
                 cells[0] = public_text(benchmark_status(stats))
-            cells[7:11] = benchmark_usage(stats)
+            cells[7:] = [*benchmark_usage(stats), *benchmark_actions(stats)]
+            cells[-1] += f" {marker}"
             lines[position] = "| " + " | ".join(cells) + " |\n"
     text = "".join(lines)
     if BENCHMARK_PRICING_NOTES.strip() not in text:
@@ -289,7 +294,8 @@ def finalize(request):
                 archive, stats = EXPORT.export_run(source, request["game_id"], repo=repo, run_id=run_id,
                     status="completed", completion_note=request["completion_note"],
                     walkthroughs=request.get("walkthrough_urls", []), skills=request.get("skills", []),
-                    agent_context=request.get("agent_context"), pricing_rates=request.get("pricing_rates"))
+                    agent_context=request.get("agent_context"), pricing_rates=request.get("pricing_rates"),
+                    work_dir=work)
         state.update(status="registering_benchmark", archive=str(archive))
         atomic_json(state_file, state)
         added = register_benchmark(archive, repo=repo, title=request.get("game_title"))
