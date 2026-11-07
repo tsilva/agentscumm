@@ -132,7 +132,7 @@ def benchmark_usage(stats):
     cost = stats.get("api_cost") or {}
     api_price = "Unknown"
     if cost.get("status") == "priced":
-        api_price = "$" + format(EXPORT.USAGE.rate(cost["total_api_price_usd"]), ",f")
+        api_price = "$" + format(EXPORT.USAGE.rate(cost["total_api_price_usd"]), ",.2f")
         if "Missing processing tiers priced as standard" in cost.get("assumptions", []):
             api_price += " (Standard assumed)"
         if cost.get("pricing_retrieved_on"):

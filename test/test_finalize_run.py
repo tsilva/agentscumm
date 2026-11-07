@@ -339,7 +339,7 @@ class FinalizationTests(unittest.TestCase):
         self.assertEqual(parsed[0][0], "✅")
         self.assertEqual(parsed[0][3], "test-model / high")
         self.assertEqual(parsed[1][3], "comparison-model / high")
-        price = f"$0.000267 (Standard assumed) · rates {stats['api_cost']['pricing_retrieved_on']}"
+        price = f"$0.00 (Standard assumed) · rates {stats['api_cost']['pricing_retrieved_on']}"
         self.assertEqual(parsed[0][7:11], ["100", "20", "70 (70.00%)", price])
         self.assertEqual(parsed[1][7:11], ["100", "20", "70 (70.00%)", price])
         self.assertEqual(parsed[0][11:], ["2", "1"])
@@ -378,7 +378,7 @@ class FinalizationTests(unittest.TestCase):
         upgraded = path.read_text()
         self.assertEqual(upgraded.count("<!-- agentscumm:benchmark:"), 1)
         self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
-        usage = ("| 100 | 20 | 70 (70.00%) | $0.000267 (Standard assumed) "
+        usage = ("| 100 | 20 | 70 (70.00%) | $0.00 (Standard assumed) "
                  f"· rates {stats['api_cost']['pricing_retrieved_on']} |")
         self.assertIn(usage, upgraded)
         self.assertIn("Editorial note preserved.", upgraded)
@@ -407,7 +407,7 @@ class FinalizationTests(unittest.TestCase):
         self.assertNotIn(FINAL.PREVIOUS_BENCHMARK_PRICING_NOTES, upgraded)
         self.assertEqual(FINAL.upgrade_benchmark_table(upgraded), upgraded)
 
-    def test_missing_price_is_unknown_and_zero_price_is_retained(self):
+    def test_benchmark_cost_rounds_to_cents_and_distinguishes_missing_price(self):
         self.source(fixture())
         _, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo)
         stats.pop("api_cost")
@@ -415,7 +415,10 @@ class FinalizationTests(unittest.TestCase):
         stats["api_cost"] = {"status": "unavailable", "total_api_price_usd": None}
         self.assertEqual(FINAL.benchmark_usage(stats)[-1], "Unknown")
         stats["api_cost"] = {"status": "priced", "total_api_price_usd": "0"}
-        self.assertEqual(FINAL.benchmark_usage(stats)[-1], "$0")
+        self.assertEqual(FINAL.benchmark_usage(stats)[-1], "$0.00")
+        stats["api_cost"]["total_api_price_usd"] = "12.34567"
+        self.assertEqual(FINAL.benchmark_usage(stats)[-1], "$12.35")
+        self.assertEqual(stats["api_cost"]["total_api_price_usd"], "12.34567")
 
 
 if __name__ == "__main__":
