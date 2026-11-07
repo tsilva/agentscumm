@@ -1,6 +1,6 @@
 ---
 name: agentscumm_autoresearch
-description: Run one research round with up to three parallel agents testing different instructions for reaching Flight of the Amazon Queen's laundry room with fewer total actions, compare verified results, and report before awaiting confirmation for another round.
+description: Run one research round with up to three parallel agents testing generic room-solving strategies without solution hints or hardcoded gameplay recipes, using visible spectator windows and comparing verified action counts at Flight of the Amazon Queen's laundry endpoint.
 ---
 
 # agentscumm: Autoresearch
@@ -11,6 +11,29 @@ Stop each trial with the launcher's evaluator, then compare verified successes b
 **total submitted primitive actions**, not `act` calls. Finish with a report and
 wait for explicit user confirmation before another round. Creating or editing
 this skill does not launch a round.
+
+## Mandatory strategy boundary
+
+Experiments test **generic strategies that apply to any room**. Never supply
+direct or indirect room-solving hints, hardcoded gameplay actions, or solution
+recipes. This applies to strategy files, common briefs, dispatch messages,
+supplied references, and follow-up messages, even when every worker would get
+the same hint. Do not provide known object/item names or combinations, target
+coordinates, verb/target sequences, prerequisite routes, object-specific
+exclusions, previous successful trajectories, or shortened candidate solutions.
+
+Only the game identity, requested goal, starting mode, tool mechanics, and
+operational/evaluation configuration may be task-specific. The fixed endpoint
+below is evaluator configuration, not a player action prescription. Players
+must discover room-specific targets and solutions from their own trial's MCP
+observations. Do not supply walkthroughs, prior gameplay memories, or external
+solution research; this overrides Play Game's usual permission to use them.
+
+Before initialization and dispatch, review every player-facing asset for this
+boundary. Remove contaminated content before starting a trial. Previous results
+may suggest generic changes to observation, planning, batching, or recovery;
+never pass their puzzle discoveries to a new player. Keep fresh workers on
+`fork_turns: "none"` and do not expose prior-round directories to them.
 
 ## Prepare
 
@@ -38,11 +61,11 @@ diagnostic rather than a controlled speed benchmark.
 
 Prepare up to three strategy files containing distinct behavioral hypotheses and
 actual player instructions. Possible contrasts are observing after state changes,
-batching only currently predictable inputs, and planning a short prerequisite
-route before acting. These are examples, not mandatory variants. Give every
-worker the same supplied references and starting knowledge; do not give only one
-a known solution or prior trajectory. Earlier results may inform new ideas, but
-cross-trial evidence stays with the coordinator until this round ends.
+batching only currently predictable inputs, and forming a short hypothesis from
+the current observation before acting. These are examples, not mandatory variants.
+Give every worker the same permitted starting knowledge and operational references,
+subject to the mandatory strategy boundary. Cross-trial gameplay evidence stays
+with the coordinator, including across later rounds.
 
 Initialize private coordinator/trial directories with immutable strategy copies:
 
@@ -65,6 +88,12 @@ before waiting so they run in parallel, within available slots. Explain when
 fewer can run. Do not replace a failed trial with an unreported fourth.
 Each trial owns its own MCP process, profile, run directory, memory, screenshots,
 logs, and request IDs. Never share the attached MCP connection or an in-use profile.
+Each trial must open its own **visible AgentSCUMM spectator window**. The helper
+leaves the client's default viewer enabled; never add `--no-viewer`. After game
+startup, require `status.viewerOpen: true` and no `viewerError`. If needed, use
+`session(operation="open_viewer")` and check status again. An unavailable spectator
+is an infrastructure failure; do not silently continue hidden or use browser
+automation to replace the MCP spectator.
 
 Immediately before each spawn, run `research.py dispatch ROUND_DIRECTORY TRIAL_ID`.
 It records that worker's own dispatch timestamp and deadline; preparation time
@@ -134,6 +163,13 @@ Rank only verified successes under frozen conditions. Failed, timed-out,
 infrastructure-failed, and unverified trials cannot win by doing less. Equal
 primary scores are ties. One trial per idea identifies the best observed result,
 not a statistically established best strategy.
+
+Review frozen briefs, dispatches, supplied references, and worker records for
+solution hints and visible-window compliance before declaring a strategy result.
+Disqualify a contaminated or hidden trial from the generic-strategy comparison,
+preserving its raw score and evidence with the explicit protocol deviation.
+Equal distribution of a solution hint does not make it valid. Historical assisted
+route tests remain historical evidence, not valid generic-strategy experiments.
 
 Complete the generated report with per-strategy evidence: what it attempted,
 where extra actions arose, and why the records suggest it performed worse.

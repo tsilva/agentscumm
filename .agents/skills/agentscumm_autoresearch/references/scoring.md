@@ -56,3 +56,12 @@ mis-targeted clicks, ignored inputs during animations, redundant inventory chang
 dialogue bursts, extra waits or travel. Counts do not prove these causes. Do not
 invent missing tokens/prices or treat one concurrent run per idea as repeatability
 or speed evidence.
+
+The coordinator must also review player-facing briefs, strategies, dispatches,
+and supplied references against the mandatory generic-strategy boundary in
+SKILL.md. No solution hints or hardcoded gameplay recipes are permitted, even
+when shared equally. Require recorded visible-spectator verification for each
+trial. The scoring helper verifies mechanical evidence, not semantic hint
+absence or visible-window compliance; a mechanical success alone does not pass
+these protocol checks. Preserve raw scores for a nonconforming trial, document
+the deviation, and exclude it from the final generic-strategy ranking.

@@ -152,7 +152,7 @@ def init_round(repo, args, probe=probe_provider):
         (trial / "strategy.md").write_bytes(content)
         (trial / "common-context.md").write_bytes(common)
         write_json(trial / "client-args.json", ["--run-dir", str(trial), "--base-url", provider["origin"],
-                   "--no-viewer", "--evaluation-log", str(trial / "variables.jsonl"),
+                   "--evaluation-log", str(trial / "variables.jsonl"),
                    "--result-file", str(trial / "result.json"), "--telemetry-ms", "250",
                    "--stop-condition", json.dumps(CONDITION, separators=(",", ":"))])
     return {"round_directory": str(round_dir), "trials": round_data["trials"],

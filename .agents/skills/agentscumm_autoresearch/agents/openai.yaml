@@ -1,4 +1,4 @@
 interface:
   display_name: "agentscumm: Autoresearch"
-  short_description: "Compare three game strategies in a single research round"
-  default_prompt: "Use $agentscumm_autoresearch to compare up to three strategies for reaching the laundry room in Flight of the Amazon Queen with fewer total actions, then report and wait before another round."
+  short_description: "Compare generic room strategies with visible trial windows"
+  default_prompt: "Use $agentscumm_autoresearch to compare up to three generic strategies without room-solving hints or hardcoded gameplay recipes, with a visible spectator for every trial, then report and wait before another round."

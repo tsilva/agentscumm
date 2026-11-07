@@ -38,6 +38,12 @@ Each trial owns an isolated MCP process/profile and ignored run directory.
 Experiment conditions do not change normal launch or Play Game defaults.
 Creating or editing the skill alone does not start gameplay.
 
+Experiment instructions must be generic strategies applicable to any room.
+Never supply room-specific solution hints, object combinations, coordinates,
+hardcoded action recipes, or prior gameplay discoveries in player-facing
+briefs, strategies, references, or dispatches. Each experiment must run with its
+own visible AgentSCUMM spectator window; hidden trials are not valid comparisons.
+
 ## Price a conversation
 
 Use [$agentscumm_price-thread](.agents/skills/agentscumm_price-thread/SKILL.md) to evaluate a Codex conversation's recorded token usage and calculate its hypothetical OpenAI API cost with the models actually used and current official rates. Its display name is `agentscumm: Price Thread`. This read-only analysis is separate from gameplay and requires no model API key. Report the usage cutoff, cache breakdown, context bands, and any processing-tier assumption; missing telemetry or pricing must remain explicit.

@@ -37,7 +37,12 @@ The repository-owned `agentscumm_autoresearch` skill coordinates one round of up
 to three isolated players and uses its standard-library `scripts/research.py`
 helper to prepare and score evidence. `pnpm test:autoresearch` runs synthetic
 evidence tests without launching games or calling models. They cover isolated
-starting manifests, opt-in endpoint arguments, clean-checkout refusal, pending
-processes, canceled trailing actions, replay accounting, failed/late/unverified
+starting manifests, visible-spectator launch defaults, opt-in endpoint arguments,
+clean-checkout refusal, pending processes, canceled trailing actions, replay accounting, failed/late/unverified
 trials, ties, runtime drift, and fresh round lineage. `pnpm test` includes them.
 See the skill for the user-confirmed round boundary and actual gameplay procedure.
+Player-facing experiment instructions must be generic strategies usable in any
+room, without solution hints, hardcoded gameplay recipes, or prior gameplay
+discoveries. Each trial opens its own visible AgentSCUMM spectator window.
+The coordinator reviews those protocol requirements separately from the helper's
+mechanical scoring checks.

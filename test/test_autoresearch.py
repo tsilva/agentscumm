@@ -113,6 +113,7 @@ class ResearchTests(unittest.TestCase):
             self.assertEqual(manifest["git"]["play_start"]["commit_id"], self.commit)
             self.assertFalse((trial / "browser").exists())
             args = research.read_json(trial / "client-args.json")
+            self.assertNotIn("--no-viewer", args, "Every trial must retain the client's visible spectator default")
             self.assertEqual(json.loads(args[args.index("--stop-condition") + 1]), research.CONDITION)
         with self.assertRaises(ValueError):
             research.dispatch_trial(self.round_dir, "missing", self.repo)
