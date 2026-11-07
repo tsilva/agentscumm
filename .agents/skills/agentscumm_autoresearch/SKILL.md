@@ -178,6 +178,11 @@ prove causes. Include missing evidence and comparison limits. Keep reports in
 the ignored round directory and give the user a compact comparison table,
 best observed result/tie/no-winner, and report link in this chat.
 
+Identify verified generic winners as candidates for the
+[Play Game strategy catalog](../agentscumm_play-game/references/strategies.md).
+Preserve their exact tested instructions in the round snapshot. Follow the
+catalog's retention procedure when the user asks to keep a strategy.
+
 End the round there. Propose next hypotheses if useful and ask whether to run
 another round, but do not create a new round, spawn players, or start games
 until the user explicitly confirms. Confirmation authorizes one new round of

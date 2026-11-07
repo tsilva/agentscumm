@@ -178,6 +178,17 @@ Use [$agentscumm_play-game](../.agents/skills/agentscumm_play-game/SKILL.md), di
 $agentscumm_play-game Flight of the Amazon Queen
 ```
 
+New runs use feedback-based pruning by default. To choose another
+[catalog strategy](../.agents/skills/agentscumm_play-game/references/strategies.md),
+include its ID or name in the request.
+
+```text
+$agentscumm_play-game Flight of the Amazon Queen using interaction-ranking
+```
+
+The skill records the selected instructions with the run and reuses them on resume
+unless you choose a different strategy.
+
 Codex launches the game, opens the spectator, and works toward its ending. It keeps free-form memory, screenshots, references, and other working data in ignored `.internal/<game-id>/<run-id>/`. Discovery, planning, and memory stay outside the MCP. You can ask it to resume a prior run or stop at a chosen milestone; completion requires evidence from the game.
 
 The skill is stored in `.agents/skills/agentscumm_play-game/` and is discoverable in this repository. To expose this repository-owned skill globally on another machine, link that folder into the host's skill directory:

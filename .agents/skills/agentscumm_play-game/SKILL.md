@@ -1,6 +1,6 @@
 ---
 name: agentscumm_play-game
-description: Play a named ScummWEB adventure through AgentSCUMM's MCP and work toward finishing it, keeping free-form memory and screenshots per run. Use for playing, continuing, or resuming a game, not for implementing the MCP or designing a solver.
+description: Play a named ScummWEB adventure through AgentSCUMM's MCP using the default or a selected catalog strategy, keeping free-form memory and screenshots per run. Use for playing, continuing, or resuming a game.
 ---
 
 # Play Game
@@ -28,6 +28,15 @@ Immediately after the clean-commit gate and storage checks pass, create the new 
 On resume, apply the same clean-commit gate, preserve the original `git.play_start` and `started_at`, and append the current timestamp and verified clean revision to `git.resume_checkpoints` before further game interaction. Do not rewrite an earlier run's starting commit to today's `HEAD`. For a historical run without a starting record, keep `git.play_start` explicitly unknown (`null`); record only the current resume checkpoint. The local checkout revision is not proof of the attached server's startup revision: retain server-reported provenance separately and never relabel it as this preflight commit.
 
 Create a free-form `memory.md` alongside the manifest immediately. Organize and revise it however useful; no room schema, visit-count policy, or fixed memory template is required. On resume, read that memory and inspect relevant saved screenshots before acting. Earlier runs for the same game can provide useful knowledge, but verify their progress claims against the actual game.
+
+### Select a play strategy
+
+Use the [strategy catalog](references/strategies.md) to resolve an explicit
+strategy ID or name, or select its default for a new ordinary run. Load only
+the chosen strategy and apply it during play. Tell the user which strategy was
+selected. An experiment uses its assigned frozen instructions. On resume, use
+the recorded strategy snapshot unless the user explicitly chooses a different
+strategy. Follow the catalog procedure to record the selection before gameplay.
 
 Read [references/run-archiving.md](references/run-archiving.md) and capture the exposed startup tool inventory and any additional injected prompt assets before gameplay. Keep `initial-context.json` and immutable supplied assets in the run directory. Preserve this capture on resume; missing historical startup context stays unknown. Check existing finalization state before queueing another job.
 
