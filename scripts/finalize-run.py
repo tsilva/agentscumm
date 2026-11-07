@@ -25,16 +25,30 @@ SPEC.loader.exec_module(EXPORT)
 require = EXPORT.require
 LEGACY_BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Total actions | Action sequences |"
 LEGACY_BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |"
-BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Input tokens | Output tokens | Cached input tokens | Total API price (USD) | Total actions | Action sequences |"
+PREVIOUS_BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Input tokens | Output tokens | Cached input tokens | Total API price (USD) | Total actions | Action sequences |"
+BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Input tokens | Output tokens | Cached input tokens (% of input) | Total API cost (USD) | Total actions | Action sequences |"
 BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
 BENCHMARK_NOTES = ("✅ marks a completed archive. Unfinished runs show the verified milestone count and latest milestone when available. "
                    "Otherwise they show a declared estimate or Unknown. "
                    "Time is elapsed conversation time (HH:MM:SS), including pauses and resumes, or elapsed so far for unfinished runs. "
                    "Tokens include cached/repeated input plus output; actions count submitted inputs, including waits. "
                    "Missing walkthrough declarations mean unspecified assistance, not unaided play.\n")
-BENCHMARK_PRICING_NOTES = ("Input tokens include cached input; output includes reasoning. "
-                           "API price is API-equivalent model-token cost in USD, excluding separately billed tools and taxes. "
-                           "Standard assumed marks missing recorded processing tiers; Unknown means no verified archived price.\n")
+PREVIOUS_BENCHMARK_PRICING_NOTES = (
+    "Input tokens include cached input; output includes reasoning. "
+    "API price is API-equivalent model-token cost in USD, excluding separately billed tools and taxes. "
+    "Standard assumed marks missing recorded processing tiers; Unknown means no verified archived price.\n"
+)
+BENCHMARK_PRICING_NOTES = (
+    "Cache percentage is cached input divided by total input, rounded to two decimal places. "
+    "It is N/A when total input is zero. Output includes reasoning tokens.\n\n"
+    "Total API cost estimates what the recorded model tokens would cost through each model's default API provider. "
+    "Each request uses the archived official rates for its exact model, processing tier and context length. "
+    "Multiply uncached input, cached input and output by their respective USD rates per million tokens, "
+    "divide by one million, and sum across requests. Apply separate cache-write rates when applicable. "
+    "The rates date is when those prices were verified for the archive and can differ from the run date. "
+    "Standard assumed marks missing processing tiers. Unknown means no verified archived cost. "
+    "The estimate excludes separately billed tools and taxes. [Pricing details](docs/run-archives.md#token-pricing)\n"
+)
 
 
 def private_directory(repo, directory):
@@ -105,6 +119,15 @@ def public_text(value):
     return html.escape(" ".join(str(value).split()), quote=False).replace("|", "\\|").replace("`", "&#96;")
 
 
+def benchmark_cached_input(cached, total):
+    if cached is None:
+        return "Unknown"
+    percentage = "Unknown"
+    if total is not None:
+        percentage = f"{cached / total:.2%}" if total else "N/A"
+    return f"{cached:,} ({percentage})"
+
+
 def benchmark_usage(stats):
     cost = stats.get("api_cost") or {}
     api_price = "Unknown"
@@ -112,8 +135,12 @@ def benchmark_usage(stats):
         api_price = "$" + format(EXPORT.USAGE.rate(cost["total_api_price_usd"]), ",f")
         if "Missing processing tiers priced as standard" in cost.get("assumptions", []):
             api_price += " (Standard assumed)"
-    return [*(f"{stats['tokens'][key]:,}" if stats["tokens"].get(key) is not None else "Unknown"
-              for key in ("input_tokens", "output_tokens", "cached_input_tokens")), api_price]
+        if cost.get("pricing_retrieved_on"):
+            api_price += f" · rates {cost['pricing_retrieved_on']}"
+    tokens = stats["tokens"]
+    return [*(f"{tokens[key]:,}" if tokens.get(key) is not None else "Unknown"
+              for key in ("input_tokens", "output_tokens")),
+            benchmark_cached_input(tokens.get("cached_input_tokens"), tokens.get("input_tokens")), api_price]
 
 
 def benchmark_status(stats):
@@ -155,19 +182,26 @@ def benchmark_entry(stats, title=None):
 def upgrade_benchmark_table(text, stats=None):
     """Upgrade the previous table without inventing missing archive measurements."""
     lines = text.splitlines(keepends=True)
-    headers = [i for i, line in enumerate(lines) if line.strip() in (LEGACY_BENCHMARK_HEADER, BENCHMARK_HEADER)]
+    headers = [i for i, line in enumerate(lines)
+               if line.strip() in (LEGACY_BENCHMARK_HEADER, PREVIOUS_BENCHMARK_HEADER, BENCHMARK_HEADER)]
     require(len(headers) <= 1, "Multiple benchmark comparison tables; resolve before registration")
-    if headers and lines[headers[0]].strip() == LEGACY_BENCHMARK_HEADER:
+    if headers and lines[headers[0]].strip() != BENCHMARK_HEADER:
         position = headers[0]
-        require(position + 1 < len(lines) and lines[position + 1].strip() == LEGACY_BENCHMARK_SEPARATOR,
-                "Invalid legacy benchmark comparison table separator")
+        legacy = lines[position].strip() == LEGACY_BENCHMARK_HEADER
+        separator = LEGACY_BENCHMARK_SEPARATOR if legacy else BENCHMARK_SEPARATOR
+        require(position + 1 < len(lines) and lines[position + 1].strip() == separator,
+                "Invalid previous benchmark comparison table separator")
         lines[position:position + 2] = [BENCHMARK_HEADER + "\n", BENCHMARK_SEPARATOR + "\n"]
         position += 2
         while position < len(lines) and lines[position].lstrip().startswith("|"):
             cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", lines[position].strip())[1:-1]]
-            require(len(cells) == 9, "Invalid legacy benchmark row")
-            matching = stats is not None and f"<!-- agentscumm:benchmark:{stats['trajectory']['sha256']} -->" in lines[position]
-            cells[7:7] = benchmark_usage(stats) if matching else ["Unknown"] * 4
+            require(len(cells) == (9 if legacy else 13), "Invalid previous benchmark row")
+            if legacy:
+                cells[7:7] = ["Unknown"] * 4
+            elif re.fullmatch(r"[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+", cells[9]):
+                total = cells[7].replace(",", "")
+                cells[9] = benchmark_cached_input(int(cells[9].replace(",", "")),
+                                                  int(total) if total.isdecimal() else None)
             lines[position] = "| " + " | ".join(cells) + " |\n"
             position += 1
     if stats is not None:
@@ -180,10 +214,11 @@ def upgrade_benchmark_table(text, stats=None):
             require(len(cells) == 13, "Invalid benchmark row")
             if stats.get("verified_progress") and cells[0] != "✅":
                 cells[0] = public_text(benchmark_status(stats))
-            cells[7:] = [*benchmark_usage(stats), *benchmark_actions(stats)]
+            cells[7:] = [*map(public_text, benchmark_usage(stats)), *benchmark_actions(stats)]
             cells[-1] += f" {marker}"
             lines[position] = "| " + " | ".join(cells) + " |\n"
     text = "".join(lines)
+    text = text.replace(PREVIOUS_BENCHMARK_PRICING_NOTES.strip(), BENCHMARK_PRICING_NOTES.strip(), 1)
     if BENCHMARK_PRICING_NOTES.strip() not in text:
         text = text.rstrip() + "\n\n" + BENCHMARK_PRICING_NOTES
     return text

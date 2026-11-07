@@ -339,8 +339,9 @@ class FinalizationTests(unittest.TestCase):
         self.assertEqual(parsed[0][0], "✅")
         self.assertEqual(parsed[0][3], "test-model / high")
         self.assertEqual(parsed[1][3], "comparison-model / high")
-        self.assertEqual(parsed[0][7:11], ["100", "20", "70", "$0.000267 (Standard assumed)"])
-        self.assertEqual(parsed[1][7:11], ["100", "20", "70", "$0.000267 (Standard assumed)"])
+        price = f"$0.000267 (Standard assumed) · rates {stats['api_cost']['pricing_retrieved_on']}"
+        self.assertEqual(parsed[0][7:11], ["100", "20", "70 (70.00%)", price])
+        self.assertEqual(parsed[1][7:11], ["100", "20", "70 (70.00%)", price])
         self.assertEqual(parsed[0][11:], ["2", "1"])
         self.assertEqual(parsed[1][11:], ["3", "1"])
         self.assertEqual(parsed[1][6], f"{stats['tokens']['total_tokens']:,}")
@@ -377,22 +378,40 @@ class FinalizationTests(unittest.TestCase):
         upgraded = path.read_text()
         self.assertEqual(upgraded.count("<!-- agentscumm:benchmark:"), 1)
         self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
-        self.assertIn("| 100 | 20 | 70 | $0.000267 (Standard assumed) |", upgraded)
+        usage = ("| 100 | 20 | 70 (70.00%) | $0.000267 (Standard assumed) "
+                 f"· rates {stats['api_cost']['pricing_retrieved_on']} |")
+        self.assertIn(usage, upgraded)
         self.assertIn("Editorial note preserved.", upgraded)
         self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
         self.assertEqual(path.read_text(), upgraded)
         # A different legacy row may already have been migrated with unknowns.
-        unknown = upgraded.replace("| 100 | 20 | 70 | $0.000267 (Standard assumed) |",
-                                   "| Unknown | Unknown | Unknown | Unknown |")
+        unknown = upgraded.replace(usage, "| Unknown | Unknown | Unknown | Unknown |")
         path.write_text(unknown)
         self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
         self.assertEqual(path.read_text(), upgraded)
+
+    def test_previous_table_backfills_cache_percentages_without_repricing(self):
+        original = "\n".join([
+            FINAL.PREVIOUS_BENCHMARK_HEADER,
+            FINAL.BENCHMARK_SEPARATOR,
+            "| ✅ | Example | 2000-01-01 | test-model | Yes | 00:01:00 | 1,320 | 1,300 | 20 | 800 | $0.25 | 4 | 2 |",
+            "| Unknown | Example | 2000-01-02 | test-model | Yes | 00:01:00 | 0 | 0 | 0 | 0 | Unknown | 0 | 0 |",
+            "| Unknown | Example | 2000-01-03 | test-model | Yes | 00:01:00 | 20 | Unknown | 20 | 0 | Unknown | 0 | 0 |",
+            "", FINAL.PREVIOUS_BENCHMARK_PRICING_NOTES,
+        ])
+        upgraded = FINAL.upgrade_benchmark_table(original)
+        self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
+        self.assertIn("| 800 (61.54%) | $0.25 |", upgraded)
+        self.assertIn("| 0 (N/A) | Unknown |", upgraded)
+        self.assertIn("| 0 (Unknown) | Unknown |", upgraded)
+        self.assertNotIn(FINAL.PREVIOUS_BENCHMARK_PRICING_NOTES, upgraded)
+        self.assertEqual(FINAL.upgrade_benchmark_table(upgraded), upgraded)
 
     def test_missing_price_is_unknown_and_zero_price_is_retained(self):
         self.source(fixture())
         _, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo)
         stats.pop("api_cost")
-        self.assertEqual(FINAL.benchmark_usage(stats), ["100", "20", "70", "Unknown"])
+        self.assertEqual(FINAL.benchmark_usage(stats), ["100", "20", "70 (70.00%)", "Unknown"])
         stats["api_cost"] = {"status": "unavailable", "total_api_price_usd": None}
         self.assertEqual(FINAL.benchmark_usage(stats)[-1], "Unknown")
         stats["api_cost"] = {"status": "priced", "total_api_price_usd": "0"}

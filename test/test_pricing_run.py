@@ -1,6 +1,7 @@
 """Run pricing accounting and archive-integrity regressions using synthetic rates."""
 
 import copy
+from decimal import Decimal
 import json
 import unittest
 from unittest.mock import patch
@@ -19,7 +20,9 @@ class PricingTests(unittest.TestCase):
         path, stats = self.export()
         cost = stats["api_cost"]
         self.assertEqual(cost["status"], "priced")
-        self.assertEqual(cost["total_api_price_usd"], "0.000267")
+        # Fixture rates per million tokens: $2 uncached input, $0.10 cached input, $10 output.
+        expected = (30 * Decimal("2") + 70 * Decimal("0.10") + 20 * Decimal("10")) / 1_000_000
+        self.assertEqual(Decimal(cost["total_api_price_usd"]), expected)
         self.assertEqual(cost["groups"][0]["tokens"], {
             "input": 30, "cached_input": 70, "cache_write_input": 0, "output": 20})
         self.assertEqual(cost["assumptions"], ["Missing processing tiers priced as standard",
