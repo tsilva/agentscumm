@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "game": "flight-of-the-amazon-queen",
+  "engine_id": "queen",
+  "milestones": [
+    {
+      "id": "hotel-escape",
+      "label": "Reached the crash site",
+      "when": { "bank": "game_state", "index": 3, "equals": 1 }
+    },
+    {
+      "id": "jungle-crossing",
+      "label": "Opened the jungle river crossing",
+      "when": { "bank": "game_state", "index": 101, "equals": 1 }
+    },
+    {
+      "id": "amazon-rescue",
+      "label": "Reached the Amazon jail rescue scene",
+      "when": { "bank": "game_state", "index": 123, "equals": 2 }
+    },
+    {
+      "id": "sloth-island",
+      "label": "Unlocked passage to Sloth Island",
+      "when": { "bank": "game_state", "index": 41, "equals": 2 }
+    },
+    {
+      "id": "temple",
+      "label": "Finished the temple sequence",
+      "when": { "bank": "game_state", "index": 67, "equals": 2 }
+    },
+    {
+      "id": "valley",
+      "label": "Cleared the last Valley of Mists obstacle",
+      "when": { "bank": "game_state", "index": 105, "equals": 1 }
+    },
+    {
+      "id": "credits",
+      "label": "Reached the ending credits",
+      "when": { "room_id": 110 }
+    }
+  ]
+}

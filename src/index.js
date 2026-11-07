@@ -129,7 +129,8 @@ async function shutdown(exitCode = 0, terminal) {
     await new Promise(resolve => setImmediate(resolve));
   } else if (reporter) {
     process.exitCode = 1;
-    await reporter.finish({ event: 'failure', success: false, reason: 'launcher_closed_before_condition' });
+    await reporter.finish({ event: 'failure', success: false, reason: 'launcher_closed_before_condition',
+      ...(evaluation.progress && { progress: evaluation.progress }) });
   }
   await runtime.close();
   await server.close();

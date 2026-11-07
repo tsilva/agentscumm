@@ -3,6 +3,7 @@ import { mkdir, open, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { z } from 'zod';
+import { loadGameProgress } from './progress.js';
 
 const fields = { engine_id: z.string().min(1).max(80), room_id: z.number().int().min(0),
   room_name: z.string().max(200), room_ready: z.boolean() };
@@ -44,7 +45,7 @@ export function parseCondition(json) {
   return conditionSchema.parse(typeof json === 'string' ? JSON.parse(json) : json);
 }
 
-// Installed by the server only for an evaluator-enabled instance. No player tool reads this state.
+// Installed for explicit evaluation or a mapped game. No player tool reads this state.
 export function enableEvaluation() {
   globalThis.__scummwebEvaluationEnabled = true;
 }
@@ -75,6 +76,15 @@ export class RunEvaluation extends EventEmitter {
     this.lastPublished = -Infinity;
     this.lastNativeTime = -Infinity;
     this.lastGameVariableTime = -Infinity;
+  }
+
+  async beginSession(game) {
+    this.progressTracker = await loadGameProgress(game);
+    this.progress = undefined;
+    this.current = undefined;
+    this.gameVariables = undefined;
+    this.gameVariableEngine = undefined;
+    this.lastPublished = this.lastNativeTime = this.lastGameVariableTime = -Infinity;
   }
 
   acceptGameVariables(records, engineId) {
@@ -146,24 +156,41 @@ export class RunEvaluation extends EventEmitter {
     const variables = this.gamePredicates.length ? (game?.match && latest) :
       candidates.find(sample => this.condition?.all.every(({ variable, equals }) => sample[variable] === equals));
     this.current = variables ?? latest ?? samples.at(-1);
+    let progressChanged = false;
+    if (this.progressTracker) {
+      const events = game?.events ?? [];
+      const matchedWrite = game?.match?.game_variable_match;
+      const stopTime = matchedWrite?.native_time_ms ?? variables?.native_time_ms ?? Infinity;
+      const matchedRoom = matchedWrite ? -1 : samples.indexOf(variables);
+      const progressRooms = matchedRoom < 0 ? samples.filter(sample => sample.native_time_ms <= stopTime) :
+        samples.slice(0, matchedRoom + 1);
+      const progressEvents = matchedWrite ? events.slice(0, events.indexOf(matchedWrite) + 1) :
+        events.filter(event => event.native_time_ms <= stopTime);
+      this.progressTracker.accept(engineId, progressRooms, progressEvents);
+      const progress = this.progressTracker.report();
+      progressChanged = JSON.stringify(progress) !== JSON.stringify(this.progress);
+      if (progressChanged) this.progress = progress;
+    }
+    const progressReport = this.progress && { progress: this.progress };
     if (variables) {
       this.result = { event: 'success', success: true, reason: 'stop_condition',
         detected_at: new Date().toISOString(), elapsed_ms: performance.now() - this.startedAt,
-        condition: this.condition, variables, ...game?.match };
+        condition: this.condition, variables, ...game?.match, ...progressReport };
       this.signal.abort(new Error('Stop condition reached'));
       this.emit('terminal', this.result);
       return;
     }
-    if (latest && performance.now() - this.lastPublished >= this.intervalMs) {
+    if (latest && (progressChanged || performance.now() - this.lastPublished >= this.intervalMs)) {
       this.lastPublished = performance.now();
       this.emit('telemetry', { event: 'variables', timestamp: new Date().toISOString(), variables: latest,
-        ...(this.gameVariables && { game_variables: this.gameVariables }) });
+        ...(this.gameVariables && { game_variables: this.gameVariables }), ...progressReport });
     }
   }
 
   fail(error) {
     if (this.result) return;
-    this.result = { event: 'failure', success: false, reason: 'evaluation_error', error: error.message };
+    this.result = { event: 'failure', success: false, reason: 'evaluation_error', error: error.message,
+      ...(this.progress && { progress: this.progress }) };
     this.signal.abort(error);
     this.emit('terminal', this.result);
   }

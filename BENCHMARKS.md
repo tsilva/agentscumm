@@ -4,7 +4,7 @@
 | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | ✅ | Flight of the Amazon Queen | 2026-11-06 | gpt-6.1-sol / high | Yes | 16:51:19 | 234,994,829 | 234,782,913 | 211,916 | 232,678,016 | $46.7736466 (Standard assumed) | 8,530 | 950 <!-- agentscumm:benchmark:ea00d2f2c82e3fea5333a08d1bc4545f366f058d045dde0bc20aaf785bec2e81 --> |
 
-✅ means completed; unfinished runs show estimated progress, or Unknown if none was recorded. Time is elapsed conversation time (HH:MM:SS), including pauses and resumes, or elapsed so far for unfinished runs. Tokens include cached/repeated input plus output; actions count submitted inputs, including waits. Missing walkthrough declarations mean unspecified assistance, not unaided play.
+✅ marks a completed archive. Unfinished runs show the verified milestone count and latest milestone when available. Otherwise they show a declared estimate or Unknown. Time is elapsed conversation time (HH:MM:SS), including pauses and resumes, or elapsed so far for unfinished runs. Tokens include cached/repeated input plus output; actions count submitted inputs, including waits. Missing walkthrough declarations mean unspecified assistance, not unaided play.
 
 One development run; the initial tool inventory and runtime revision are unknown, and skill copies are later snapshots.
 

@@ -11,7 +11,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from test_export_run import fixture, record, rates_fixture, THREAD
+from test_export_run import fixture, record, rates_fixture, SESSION, THREAD
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -201,6 +201,76 @@ class FinalizationTests(unittest.TestCase):
         for status in ("in_progress", "blocked", "stopped"):
             stats["status"] = status
             self.assertTrue(FINAL.benchmark_entry(stats).startswith("| ~42.5% |"))
+
+    def test_unfinished_queen_uses_latest_verified_sample_through_the_archive_cutoff(self):
+        game = "flight-of-the-amazon-queen"
+        profile = self.repo / ".internal" / game / THREAD / "browser"
+        (profile / "runs").mkdir(parents=True)
+        status = {"sessionId": SESSION, "game": game, "dataDir": str(profile)}
+        rows = fixture()
+        launch = rows[5]["payload"]["item"]
+        launch["arguments"]["game"] = game
+        launch["result"] = {"content": [{"type": "text", "text": json.dumps(status)}]}
+        self.source(rows)
+        ids = ["hotel-escape", "jungle-crossing", "amazon-rescue", "sloth-island", "temple", "valley", "credits"]
+
+        def sample(second, count, label, session=SESSION):
+            return {"timestamp": record("unused", {}, second)["timestamp"], "type": "progress",
+                    "sessionId": session, "progress": {"game": game, "state": "tracked", "total": 7,
+                        "completed": count, "percent": round(count * 100 / 7), "reached": ids[:count],
+                        "latest_milestone": label}}
+
+        log = profile / "runs" / f"{SESSION}.jsonl"
+        events = [{"type": "launch", **status}, sample(3, 6, "Cleared the last Valley of Mists obstacle"),
+                  sample(5, 2, "Opened the jungle river crossing"),
+                  sample(6, 7, "Reached the ending credits", session=THREAD),
+                  sample(7, 7, "Reached the ending credits")]
+        log.write_text("".join(json.dumps(event) + "\n" for event in events) + '{"incomplete":')
+
+        archive, stats = FINAL.EXPORT.export_run(self.rollout, game, repo=self.repo, status="stopped",
+                                                 estimated_progress=85)
+        self.assertEqual(FINAL.EXPORT.verify_run(archive)["verified_progress"]["completed"], 2)
+        log.unlink()
+        self.assertTrue(FINAL.register_benchmark(archive, repo=self.repo))
+        benchmark = self.repo / "BENCHMARKS.md"
+        self.assertIn("| 2/7 · Opened the jungle river crossing |", benchmark.read_text())
+        self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
+        self.assertNotIn(str(profile), benchmark.read_text())
+        for run_status in ("in_progress", "blocked", "stopped"):
+            self.assertTrue(FINAL.benchmark_entry({**stats, "status": run_status}).startswith("| 2/7 · "))
+        stats["verified_progress"]["completed"] = 7
+        (archive / "run.json").write_text(json.dumps(stats))
+        with self.assertRaisesRegex(ValueError, "milestone count"):
+            FINAL.EXPORT.verify_run(archive)
+
+    def test_local_queen_session_progress_is_discovered_without_a_native_mcp_result(self):
+        game = "flight-of-the-amazon-queen"
+        work = self.repo / ".internal" / game / THREAD
+        profile = work / "browser"
+        (profile / "runs").mkdir(parents=True)
+        status = {"sessionId": SESSION, "game": game, "dataDir": str(profile)}
+        when = record("unused", {}, 4)["timestamp"]
+        event = {"timestamp": when, "result": {"name": "status", "isError": False, "content": [status]}}
+        (work / "events.jsonl").write_text(json.dumps(event) + "\n")
+        sample = {"type": "progress", "sessionId": SESSION, "timestamp": when,
+                  "progress": {"game": game, "state": "tracked", "total": 7, "completed": 0,
+                               "percent": 0, "reached": [], "latest_milestone": None}}
+        log = profile / "runs" / f"{SESSION}.jsonl"
+        log.write_text(json.dumps({"type": "launch", **status}) + "\n" + json.dumps(sample) + "\n")
+        rows = fixture()
+        rows[5]["payload"]["item"]["arguments"]["game"] = game
+        self.source(rows)
+        _, stats = FINAL.EXPORT.export_run(self.rollout, game, repo=self.repo, status="blocked")
+        self.assertTrue(FINAL.benchmark_entry(stats).startswith("| 0/7 · No milestones verified |"))
+        sample["progress"] = {"game": game, "state": "unavailable", "total": 7, "reason": "missing_game_variables"}
+        with log.open("a") as output:
+            output.write(json.dumps(sample) + "\n")
+        context = work / "initial-context.json"
+        context.write_text(json.dumps({"schema_version": 1}))
+        _, unavailable = FINAL.EXPORT.export_run(self.rollout, game, repo=self.repo, status="blocked",
+            run_id="after-restore", agent_context=context, estimated_progress=25)
+        self.assertNotIn("verified_progress", unavailable)
+        self.assertTrue(FINAL.benchmark_entry(unavailable).startswith("| ~25% |"))
 
     def test_comparison_table_appends_runs_as_contiguous_rows_and_preserves_notes(self):
         self.source(fixture(complete=True))

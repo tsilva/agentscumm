@@ -107,6 +107,28 @@ Variable success receipts include the matching native record as
 `game_variable_match` and the bank snapshot at that point as `game_variables`.
 Use the pinned runtime and game data when interpreting slot numbers.
 
+### Story progress
+
+Games with a progress map record changes in their private session log for
+[benchmark export](run-archives.md). Evaluator-enabled launches also include
+`progress` in private telemetry snapshots and result receipts. Flight of the Amazon Queen
+has seven milestones for the English DOS talkie edition. Six are game variables
+and the seventh is room 110, the start of the ending credits. The credits are
+observed during a cutaway, so the rule accepts `room_ready: false`.
+
+Progress includes the count, total, rounded percentage, and furthest milestone
+reached in map order. A restored save rebuilds the score from its variables.
+Each milestone counts once on that save timeline. When the runtime lacks the
+required variables, progress is reported as unavailable. This percentage counts
+story milestones and does not estimate time remaining.
+
+To watch progress without automatically stopping the game, supply
+`--evaluation-log /absolute/run/variables.jsonl` and omit `--stop-condition`.
+
+```sh
+tail -F /absolute/run/variables.jsonl | jq --unbuffered -c 'select(.progress) | .progress'
+```
+
 ## Parallel instances
 
 Give each agent a separate stdio MCP server process. With no storage options, each process automatically gets a unique instance ID and persistent data directory at `.agentscumm/instances/<instance-id>/`. Agents can play the same game or different games concurrently. Each instance has its own browser profile, saves/cache, action queue, request cache, frame history, loopback spectator endpoint and spectator window. Closing or restarting one server leaves the others running. Each process still owns one active game; sharing one MCP connection does not create independent games.

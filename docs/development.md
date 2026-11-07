@@ -28,6 +28,15 @@ suite with `node --test --test-concurrency=1 test/*.test.js`, then
 arrival timing of a real game; verify that through MCP against the pinned native
 provider before treating a new endpoint as a benchmark.
 
+Progress maps live in `src/progress-maps/<game-slug>.json`. The evaluator loads
+the map for the launched slug. Define `schema_version: 1`, `game`, `engine_id`,
+and ordered `milestones` with unique IDs and display labels. Each `when` rule
+matches a typed `{bank, index, equals}` or a `{room_id}` with optional
+`room_ready`. Verify rules against the target edition and test restores,
+alternate paths, and the live ending before adding a completion milestone.
+Mapped games record milestone changes in their private session logs for
+benchmark export. Progress tracking runs independently of stop conditions.
+
 `pnpm test:live` launches Flight of the Amazon Queen on the configured live site through stdio MCP, opens the spectator, checks screenshot dimensions, exercises click/key/wait sequences and retry behavior, and retrieves frame history. It uses an isolated temporary profile and closes its browser processes afterward. It does not solve the game. Local verification captures stay under ignored `.internal/`.
 
 Runtime code is in `src/`: `index.js` exposes MCP, `runtime.js` owns the game lifecycle and controls, `health.js` observes mechanical runtime failures, `viewer.js` serves the spectator, `macos-app.js` builds and manages the native spectator, `history.js` bounds visual history, and `actions.js` validates and serializes input. `display.js` observes render geometry for shared screenshot and spectator cropping; tests cover pillarboxing, letterboxing, widescreen and portrait games, black scenes, menus and native window aspect changes. The macOS app source and bundle metadata are in `macos/`. ScummWEB remains the separate browser game runtime; this project does not copy its game payloads.

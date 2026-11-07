@@ -13,7 +13,7 @@ import { installHealthObserver, readShellState, bounded } from './health.js';
 import { installDisplayObserver, displayBounds, captureBounds } from './display.js';
 import { claimDataDir } from './instances.js';
 import { readLibrary, validateZipPaths, importZipFiles, saveLibrary, launchReattachedGame } from './library.js';
-import { enableEvaluation, readEvaluation } from './evaluation.js';
+import { enableEvaluation, readEvaluation, RunEvaluation } from './evaluation.js';
 import { installAudioControl } from './audio.js';
 
 export const games = [
@@ -159,6 +159,9 @@ export class GameRuntime {
       if (this.phase === 'loading') throw new Error('A game is loading; wait for it or close the session first');
       if (this.page) await this.stopPage();
       this.importedGame = (await readLibrary(this.dataDir)).games.find(item => item.slug === game);
+      const evaluation = this.evaluation ?? new RunEvaluation();
+      await evaluation.beginSession(game);
+      this.sessionEvaluation = this.evaluation || evaluation.progressTracker ? evaluation : undefined;
       this.launchMode = mode;
       this.sessionId = randomUUID();
       this.game = game;
@@ -251,7 +254,7 @@ export class GameRuntime {
     await page.addInitScript(installAudioControl);
     await page.addInitScript(installHealthObserver);
     await page.addInitScript(installDisplayObserver);
-    if (this.evaluation) await page.addInitScript(enableEvaluation);
+    if (this.sessionEvaluation) await page.addInitScript(enableEvaluation);
     page.on('request', request => {
       const url = new URL(request.url());
       if (['http:', 'https:'].includes(url.protocol)) this.pendingRequests.set(request, { path: url.pathname, type: request.resourceType() });
@@ -326,7 +329,7 @@ export class GameRuntime {
               remaining();
               await this.capture('launch-ready');
               this.scheduleCapture(sessionId);
-              if (this.evaluation) this.scheduleEvaluation(sessionId);
+              if (this.sessionEvaluation) this.scheduleEvaluation(sessionId);
               await this.log('ready', { reason: this.readyReason, firstFrame: this.history.latest()?.id });
               return;
             }
@@ -519,11 +522,12 @@ export class GameRuntime {
           }
           record.completed++;
           await this.log('action-step', { actionId, ...step });
-          await this.pollEvaluation();
+          if (this.evaluation) await this.pollEvaluation();
           inputSignal.throwIfAborted();
           await this.assertReady(sessionId);
         }
         if (afterMs) await sleep(afterMs, undefined, { signal: inputSignal });
+        if (!this.evaluation) await this.pollEvaluation();
         await this.assertReady(sessionId);
         result.frame = await this.capture('after-action');
         record.state = 'completed';
@@ -579,28 +583,42 @@ export class GameRuntime {
   }
 
   async pollEvaluation() {
-    if (!this.evaluation || this.evaluation.result || this.phase !== 'ready') return;
+    const evaluation = this.sessionEvaluation;
+    if (!evaluation || evaluation.result || this.phase !== 'ready') return;
     if (this.evaluationRead) return this.evaluationRead;
+    const { shell, sessionId } = this;
+    const isCurrent = () => this.shell === shell && this.sessionId === sessionId && this.phase === 'ready';
     this.evaluationRead = (async () => {
       try {
-        const payload = await bounded(this.shell.evaluate(readEvaluation), 2000, 'Evaluator could not read engine telemetry');
-        const hasTelemetry = payload.current || (!this.evaluation.requiresRoomTelemetry && payload.gameVariableEvents != null);
+        const payload = await bounded(shell.evaluate(readEvaluation), 2000, 'Evaluator could not read engine telemetry');
+        if (!isCurrent()) return;
+        const hasTelemetry = payload.current || (!evaluation.requiresRoomTelemetry && payload.gameVariableEvents != null);
         if (!hasTelemetry && performance.now() - this.evaluationReadyAt > 5000) {
           throw new Error('This game runtime does not provide evaluation variables; rebuild with the supported engine hook');
         }
-        if (hasTelemetry) this.evaluation.accept(payload);
-      } catch (error) { this.evaluation.fail(error); }
+        if (hasTelemetry) {
+          const previous = evaluation.progress;
+          evaluation.accept(payload);
+          if (evaluation.progress && evaluation.progress !== previous) {
+            await this.log('progress', { progress: evaluation.progress });
+          }
+        }
+      } catch (error) { if (isCurrent()) evaluation.fail(error); }
     })();
     try { await this.evaluationRead; } finally { this.evaluationRead = null; }
   }
 
   scheduleEvaluation(sessionId) {
+    const { sessionEvaluation: evaluation, shell } = this;
+    const isActive = () => !this.closing && this.sessionId === sessionId && this.shell === shell && !evaluation.result;
     this.evaluationReadyAt = performance.now();
     const tick = async () => {
-      if (this.closing || this.sessionId !== sessionId || this.evaluation.result) return;
-      if (this.phase !== 'ready') { this.evaluation.fail(new Error('Game runtime left the ready state')); return; }
+      if (!isActive()) return;
+      if (this.phase !== 'ready') { evaluation.fail(new Error('Game runtime left the ready state')); return; }
       await this.pollEvaluation();
-      if (!this.closing && !this.evaluation.result) this.evaluationTimer = setTimeout(tick, this.evaluation.intervalMs);
+      if (isActive()) {
+        this.evaluationTimer = setTimeout(tick, evaluation.intervalMs);
+      }
     };
     this.evaluationTimer = setTimeout(tick, 0);
   }
@@ -634,6 +652,7 @@ export class GameRuntime {
     this.page = null; this.canvas = null; this.shell = null;
     if (page === this.libraryPage) this.libraryPage = null;
     await page?.close();
+    await this.evaluationRead;
     await this.captureTask?.catch(() => {});
   }
 

@@ -43,6 +43,52 @@ const baseline = (value, native_time_ms) => ({ event: 'game_variables_baseline',
 const change = (previous, value, native_time_ms) => ({ event: 'game_variables_change', native_time_ms,
   bank: 'game_state', index: 93, previous, value });
 
+const queenSlug = 'flight-of-the-amazon-queen';
+function progressBaseline(native_time_ms, achieved = []) {
+  const bank = Array(211).fill(0);
+  for (const [index, value] of achieved) bank[index] = value;
+  return { event: 'game_variables_baseline', native_time_ms, banks: { game_state: bank } };
+}
+
+test('Queen progress follows the active save and reaches 100% on the credits cutaway', async () => {
+  const evaluation = new RunEvaluation({ condition: { all: [{ variable: 'room_id', equals: 110 }] } });
+  await evaluation.beginSession(queenSlug);
+  const six = [[3, 1], [101, 1], [123, 2], [41, 2], [67, 2], [105, 1]];
+  evaluation.accept({ current: state(67, 2), events: [], gameVariableEvents: [progressBaseline(1, six)] });
+  assert.equal(evaluation.progress.completed, 6);
+  assert.equal(evaluation.progress.percent, 86);
+  evaluation.accept({ current: state(70, 4), events: [], gameVariableEvents: [progressBaseline(3)] });
+  assert.deepEqual(evaluation.progress.reached, []);
+  const crossing = { event: 'game_variables_change', native_time_ms: 5,
+    bank: 'game_state', index: 101, previous: 0, value: 1 };
+  evaluation.accept({ current: state(21, 7), events: [],
+    gameVariableEvents: [crossing, { ...crossing, native_time_ms: 6, previous: 1, value: 0 }] });
+  assert.deepEqual(evaluation.progress.reached, ['jungle-crossing']);
+  evaluation.accept({ current: state(67, 9), events: [], gameVariableEvents: [progressBaseline(8, six)] });
+  evaluation.accept({ current: state(111, 11), events: [state(110, 10, false)], gameVariableEvents: [] });
+  assert.equal(evaluation.result.progress.completed, 7);
+  assert.equal(evaluation.result.progress.percent, 100);
+  assert.equal(evaluation.result.variables.room_ready, false);
+});
+
+test('progress stays unavailable without a bank and a stop ignores later room records', async () => {
+  const evaluation = new RunEvaluation({ condition });
+  await evaluation.beginSession(queenSlug);
+  evaluation.accept({ current: state(70, 1), events: [] });
+  assert.equal(evaluation.progress.reason, 'missing_game_variables');
+  evaluation.accept({ current: state(110, 5, false), events: [state(71, 4)],
+    gameVariableEvents: [progressBaseline(2, [[3, 1]])] });
+  assert.deepEqual(evaluation.result.progress.reached, ['hotel-escape']);
+  assert.equal(evaluation.result.variables.room_id, 71);
+
+  const newSession = new RunEvaluation();
+  await newSession.beginSession(queenSlug);
+  newSession.accept({ current: state(70, 10), events: [], gameVariableEvents: [progressBaseline(9, [[3, 1]])] });
+  await newSession.beginSession('unmapped-game');
+  newSession.accept({ current: state(1, 1), events: [] });
+  assert.equal(newSession.progress, undefined);
+});
+
 test('game variable transitions ignore restored values and retain the matching snapshot', () => {
   const evaluation = new RunEvaluation({ condition: variableCondition });
   const records = [];
@@ -115,6 +161,24 @@ test('missing engine telemetry fails explicitly without a visual fallback', { ti
   assert.match(result.error, /does not provide evaluation variables/);
 });
 
+test('normal play records mapped progress in the private session log', { timeout: 20000 }, async t => {
+  const fixture = await startFixture({ evaluation: 'progress' });
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-progress-'));
+  const runtime = new GameRuntime({ baseUrl: fixture.url, dataDir, viewer: false });
+  t.after(async () => { await runtime.close(); await fixture.close(); await rm(dataDir, { recursive: true, force: true }); });
+  const { sessionId } = await runtime.start();
+  await runtime.waitReady(10000);
+  await runtime.act({ session_id: sessionId, request_id: 'first-milestone',
+    actions: [{ type: 'click', x: 50, y: 50 }] });
+  const rows = (await readFile(path.join(dataDir, 'runs', `${sessionId}.jsonl`), 'utf8')).trim().split('\n').map(JSON.parse);
+  const samples = rows.filter(row => row.type === 'progress');
+  assert.ok(samples.every(row => row.sessionId === sessionId));
+  assert.deepEqual(samples.at(-1).progress, { game: queenSlug, total: 7, state: 'tracked',
+    completed: 1, percent: 14, latest_milestone: 'Reached the crash site', reached: ['hotel-escape'] });
+  assert.equal(runtime.status().phase, 'ready');
+  assert.doesNotMatch(JSON.stringify(runtime.status()), /latest_milestone|game_state|room_id/);
+});
+
 test('launcher accepts a variable-only provider and keeps receipts and telemetry off stdout', { timeout: 30000 }, async t => {
   const fixture = await startFixture({ evaluation: 'game_variables_only' });
   const directory = await mkdtemp(path.join(tmpdir(), 'agentscumm-launcher-'));
@@ -149,6 +213,7 @@ test('launcher accepts a variable-only provider and keeps receipts and telemetry
   const result = JSON.parse(await readFile(resultFile, 'utf8'));
   assert.equal(result.success, true);
   assert.deepEqual(result.variables, { engine_id: 'queen' });
+  assert.equal(result.progress.reason, 'missing_game_variables');
   assert.equal(result.game_variables.game_state[93], 1);
   assert.equal(result.game_variable_match.previous, 0);
   assert.ok((await readFile(result.screenshot)).length > 1000);
@@ -158,5 +223,5 @@ test('launcher accepts a variable-only provider and keeps receipts and telemetry
   assert.deepEqual(telemetry.filter(event => event.event === 'game_variables_change').map(event => event.value), [1, 0]);
   assert.equal(telemetry.at(-1).event, 'success');
   assert.ok(messages.every(message => message.jsonrpc === '2.0'));
-  assert.doesNotMatch(JSON.stringify(messages), /room_id|room_ready|native_time_ms|game_state|game_variables/);
+  assert.doesNotMatch(JSON.stringify(messages), /room_id|room_ready|native_time_ms|game_state|game_variables|"progress"/);
 });

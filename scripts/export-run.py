@@ -116,26 +116,115 @@ def exporter_git(repo):
         return {"commit_id": None, "branch": None, "dirty": None, "source": "unavailable"}
 
 
-def runtime_revisions(value):
-    """Read source revisions returned by AgentSCUMM, including JSON text wrappers."""
+def runtime_objects(value):
+    """Unwrap objects returned by AgentSCUMM, including JSON text wrappers."""
     if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from runtime_objects(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from runtime_objects(child)
+    elif isinstance(value, str) and value.lstrip().startswith(("{", "[")):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return
+        yield from runtime_objects(parsed)
+
+
+def runtime_revisions(objects):
+    for value in objects:
         revision = value.get("sourceRevision")
         if isinstance(revision, dict) and revision.get("repository") == "agentscumm":
             commit = revision.get("commit_id")
             require(commit is None or isinstance(commit, str) and re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", commit),
                     "Invalid recorded AgentSCUMM commit ID")
             yield revision
-        for child in value.values():
-            yield from runtime_revisions(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from runtime_revisions(child)
-    elif isinstance(value, str) and value.lstrip().startswith(("{", "[")):
-        try:
-            parsed = json.loads(value)
-        except ValueError:
-            return
-        yield from runtime_revisions(parsed)
+
+
+def runtime_session(objects):
+    for value in objects:
+        session = value.get("sessionId")
+        game, profile = value.get("game"), value.get("dataDir")
+        if (isinstance(session, str)
+                and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", session)
+                and isinstance(game, str) and isinstance(profile, str) and Path(profile).is_absolute()):
+            return session, game, Path(profile)
+
+
+def private_records(path):
+    if path.is_file() and not any(part.is_symlink() for part in (path, *path.parents)):
+        with path.open("rb") as stream:
+            remaining = os.fstat(stream.fileno()).st_size
+            while remaining:
+                line = stream.readline(remaining)
+                if not line.endswith(b"\n"):
+                    break  # A live writer may still be appending this row.
+                remaining -= len(line)
+                yield json.loads(line)
+
+
+def local_runtime_session(repo, game, run_id, agent_context, started, end):
+    work = repo / ".internal" / game / run_id
+    if agent_context:
+        context_work = Path(agent_context).absolute().parent
+        if context_work.parent == work.parent:
+            work = context_work
+    latest = None
+    for event in private_records(work / "events.jsonl"):
+        result = event.get("result", {})
+        if result.get("name") not in ("session", "status") or result.get("isError"):
+            continue
+        when = USAGE.timestamp(event["timestamp"])
+        if started <= when <= end:
+            session = runtime_session(runtime_objects(result))
+            if session and session[2] == work / "browser":
+                latest = when, session
+    return latest
+
+
+def verified_run_progress(active, game, started, end):
+    if not active:
+        return None
+    _, (session, observed_game, profile) = active
+    if observed_game != game:
+        return None
+    launch_verified = False
+    latest = None
+    for row in private_records(profile / "runs" / f"{session}.jsonl"):
+        if row.get("sessionId") != session:
+            continue
+        if row.get("type") == "launch":
+            launch_verified = row.get("game") == game and row.get("dataDir") == str(profile)
+        if launch_verified and row.get("type") == "progress":
+            when = USAGE.timestamp(row["timestamp"])
+            if started <= when <= end:
+                latest = row
+    if latest and latest["progress"]["state"] == "tracked":
+        return {**latest["progress"], "session_id": session, "recorded_at": latest["timestamp"]}
+
+
+def verify_run_progress(stats):
+    progress = stats.get("verified_progress")
+    if progress is None:
+        return
+    require(isinstance(progress, dict) and progress.get("state") == "tracked"
+            and progress.get("game") == stats["game_id"]
+            and progress.get("session_id") in stats.get("sessions", []), "Invalid verified progress identity")
+    when = USAGE.timestamp(progress["recorded_at"])
+    require(USAGE.timestamp(stats["started_at"]) <= when <= USAGE.timestamp(stats["recorded_through"]),
+            "Verified progress is outside the archive cutoff")
+    total, completed, reached = (progress.get(key) for key in ("total", "completed", "reached"))
+    require(type(total) is int and type(completed) is int and 0 <= completed <= total <= 100 and total > 0
+            and type(progress.get("percent")) is int
+            and progress["percent"] == math.floor(completed * 100 / total + 0.5)
+            and isinstance(reached, list) and len(reached) == completed
+            and all(isinstance(item, str) and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", item) for item in reached)
+            and len(set(reached)) == completed, "Invalid verified milestone count")
+    label = progress.get("latest_milestone")
+    require(label is None if completed == 0 else isinstance(label, str) and 0 < len(label.strip()) <= 200,
+            "Invalid verified milestone label")
 
 
 def sequence_stats(lengths):
@@ -653,6 +742,7 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
         counts, tools, actions, contexts = Counter(), Counter(), Counter(), []
         sequence_lengths = []
         seen_tools, sessions, observed_games, revisions = set(), set(), set(), []
+        active_session = None
         last_task, end, source_records, model_images, tool_seconds = None, started, 0, 0, 0.0
         trajectory = staging / "trajectory.jsonl"
         with trajectory.open("x", encoding="utf-8") as output:
@@ -682,9 +772,15 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                                                 payload.get("started_at_ms", 0)) / 1000
                             args = item.get("arguments", {})
                             if item.get("server") == "agentscumm":
-                                for revision in runtime_revisions(item.get("result", {})):
+                                objects = list(runtime_objects(item.get("result", {})))
+                                for revision in runtime_revisions(objects):
                                     if revision not in revisions:
                                         revisions.append(revision)
+                                if item.get("tool") in ("status", "session", "launch_game"):
+                                    session = runtime_session(objects)
+                                    if session:
+                                        sessions.add(session[0])
+                                        active_session = when, session
                                 if args.get("session_id"):
                                     sessions.add(args["session_id"])
                                 if (item.get("tool") == "launch_game" or
@@ -701,6 +797,13 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                 output.write(dump(screenshots.transform(record)) + "\n")
         require(not observed_games or observed_games == {game_id},
                 "Rollout contains a different game; select a single-game conversation")
+        progress = None
+        if status != "completed":
+            local_session = local_runtime_session(Path(repo).resolve(), game_id, run_id, agent_context, started, end)
+            if local_session and (not active_session or local_session[0] > active_session[0]):
+                active_session = local_session
+                sessions.add(local_session[1][0])
+            progress = verified_run_progress(active_session, game_id, started, end)
         if status == "completed":
             require(last_task == "task_complete", "Conversation is still active or interrupted; cannot finalize")
             require(isinstance(completion_note, str) and completion_note.strip(),
@@ -761,6 +864,8 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                 "Cached input is a subset of input; reasoning is a subset of output."]}
         if not revisions:
             stats["limitations"].append("AgentSCUMM's startup commit was not recorded for this run; the exporter checkout is not a substitute.")
+        if progress:
+            stats["verified_progress"] = progress
         write_json(staging / "run.json", stats)
         verify_run(staging)
         source.unlink()
@@ -795,6 +900,7 @@ def verify_run(directory):
         validate_progress(stats["estimated_progress_percent"])
         require(stats["status"] != "completed" or stats["estimated_progress_percent"] in (None, 100),
                 "Completed runs require 100 percent progress")
+    verify_run_progress(stats)
     if "total_actions" in stats or "total_action_sequences" in stats:
         for key, expected in (("total_actions", sum(stats["actions"].values())),
                               ("total_action_sequences", stats["action_sequences"]["count"])):

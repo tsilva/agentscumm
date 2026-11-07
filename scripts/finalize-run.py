@@ -27,7 +27,8 @@ LEGACY_BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkt
 LEGACY_BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |"
 BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Input tokens | Output tokens | Cached input tokens | Total API price (USD) | Total actions | Action sequences |"
 BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
-BENCHMARK_NOTES = ("✅ means completed; unfinished runs show estimated progress, or Unknown if none was recorded. "
+BENCHMARK_NOTES = ("✅ marks a completed archive. Unfinished runs show the verified milestone count and latest milestone when available. "
+                   "Otherwise they show a declared estimate or Unknown. "
                    "Time is elapsed conversation time (HH:MM:SS), including pauses and resumes, or elapsed so far for unfinished runs. "
                    "Tokens include cached/repeated input plus output; actions count submitted inputs, including waits. "
                    "Missing walkthrough declarations mean unspecified assistance, not unaided play.\n")
@@ -115,17 +116,26 @@ def benchmark_usage(stats):
               for key in ("input_tokens", "output_tokens", "cached_input_tokens")), api_price]
 
 
+def benchmark_status(stats):
+    if stats["status"] == "completed":
+        return "✅"
+    progress = stats.get("verified_progress")
+    if progress:
+        label = progress["latest_milestone"] or "No milestones verified"
+        return f"{progress['completed']}/{progress['total']} · {label}"
+    estimate = stats.get("estimated_progress_percent")
+    EXPORT.validate_progress(estimate)
+    return f"~{estimate:g}%" if estimate is not None else "Unknown"
+
+
 def benchmark_entry(stats, title=None):
     digest = stats["trajectory"]["sha256"]
     require(re.fullmatch(r"[0-9a-f]{64}", digest), "Invalid trajectory checksum")
     title = title or stats["game_id"].replace("-", " ").title()
     completed = EXPORT.USAGE.timestamp(stats["recorded_through"]).astimezone(timezone.utc).date()
     seconds = round(stats["wall_clock_seconds"])
-    progress = stats.get("estimated_progress_percent")
-    EXPORT.validate_progress(progress)
-    status = "✅" if stats["status"] == "completed" else f"~{progress:g}%" if progress is not None else "Unknown"
     cells = [
-        status, title, completed.isoformat(),
+        benchmark_status(stats), title, completed.isoformat(),
         ", ".join(stats["models"]) + " / " + (", ".join(stats["reasoning_levels"]) or "Unknown"),
         "Yes" if stats["walkthrough_urls"] else "Unspecified",
         f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}",
@@ -164,6 +174,8 @@ def upgrade_benchmark_table(text, stats=None):
             position = matching[0]
             cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", lines[position].strip())[1:-1]]
             require(len(cells) == 13, "Invalid benchmark row")
+            if stats.get("verified_progress") and cells[0] != "✅":
+                cells[0] = public_text(benchmark_status(stats))
             cells[7:11] = benchmark_usage(stats)
             lines[position] = "| " + " | ".join(cells) + " |\n"
     text = "".join(lines)
