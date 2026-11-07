@@ -1,24 +1,36 @@
 import { readFile } from 'node:fs/promises';
+import { parse } from 'yaml';
 import { z } from 'zod';
 
 const slug = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
-const bankPredicate = z.object({
+const bankSlot = z.object({
   bank: z.string().regex(/^[a-z][a-z0-9_]{0,39}$/),
   index: z.number().int().min(0).max(4095),
-  equals: z.union([z.number().int(), z.boolean()]),
-}).strict();
+});
+const bankPredicate = z.union([
+  bankSlot.extend({ equals: z.union([z.number().int(), z.boolean()]) }).strict(),
+  bankSlot.extend({ mask: z.number().int().min(1).max(0x7fffffff), equals: z.number().int() }).strict(),
+  bankSlot.extend({ one_of: z.array(z.number().int()).min(1).max(16) }).strict(),
+]);
 const roomPredicate = z.object({
   room_id: z.number().int().nonnegative(),
   room_ready: z.boolean().optional(),
 }).strict();
+const predicate = z.union([
+  bankPredicate, roomPredicate, z.object({ milestone: slug }).strict(),
+  z.object({ all: z.array(z.lazy(() => predicate)).min(1).max(16) }).strict(),
+  z.object({ any: z.array(z.lazy(() => predicate)).min(1).max(16) }).strict(),
+]);
 const mapSchema = z.object({
   schema_version: z.literal(1),
   game: slug,
   engine_id: z.string().min(1).max(80),
+  edition: z.object({ game_id: slug, index_md5: z.string().regex(/^[a-f0-9]{32}$/) }).strict().optional(),
+  scoring: z.literal('highest_stage').optional(),
   milestones: z.array(z.object({
     id: slug,
     label: z.string().min(1).max(200),
-    when: z.union([bankPredicate, roomPredicate]),
+    when: predicate,
   }).strict()).min(1).max(100),
 }).strict();
 
@@ -26,50 +38,70 @@ export async function loadGameProgress(game) {
   slug.parse(game);
   let source;
   try {
-    source = await readFile(new URL(`./progress-maps/${game}.json`, import.meta.url), 'utf8');
+    source = await readFile(new URL(`./progress-maps/${game}.yaml`, import.meta.url), 'utf8');
   } catch (error) {
     if (error.code === 'ENOENT') return;
     throw error;
   }
-  const map = mapSchema.parse(JSON.parse(source));
-  if (map.game !== game || new Set(map.milestones.map(({ id }) => id)).size !== map.milestones.length) {
-    throw new Error(`Invalid game or duplicate milestone IDs in progress map: ${game}`);
+  const map = mapSchema.parse(parse(source, { maxAliasCount: 0, stringKeys: true }));
+  const ids = new Set();
+  for (const { id, when } of map.milestones) {
+    if (map.game !== game || ids.has(id) || leaves(when).some(rule => rule.milestone && !ids.has(rule.milestone))) {
+      throw new Error(`Invalid game, milestone ID or milestone reference in progress map: ${game}`);
+    }
+    ids.add(id);
   }
   return new GameProgress(map);
+}
+
+function leaves(rule) {
+  const children = rule.all ?? rule.any;
+  return children ? children.flatMap(leaves) : [rule];
 }
 
 class GameProgress {
   constructor(map) {
     this.map = map;
-    this.variableMilestones = map.milestones.filter(({ when }) => 'bank' in when);
-    this.roomMilestones = map.milestones.filter(({ when }) => 'room_id' in when);
+    this.variableRules = map.milestones.flatMap(({ when }) => leaves(when)).filter(rule => 'bank' in rule);
     this.reached = new Set();
-    this.variablesAvailable = this.variableMilestones.length === 0;
-    this.roomsAvailable = false;
+    this.variablesAvailable = this.variableRules.length === 0;
   }
 
-  accept(engineId, rooms, gameEvents) {
+  matches(rule, room) {
+    if (rule.all) return rule.all.every(child => this.matches(child, room));
+    if (rule.any) return rule.any.some(child => this.matches(child, room));
+    if (rule.milestone) return this.reached.has(rule.milestone);
+    if ('room_id' in rule) return room?.room_id === rule.room_id &&
+      (rule.room_ready === undefined || room.room_ready === rule.room_ready);
+    const value = this.banks?.[rule.bank]?.[rule.index];
+    if (rule.one_of) return rule.one_of.includes(value);
+    if (rule.mask) return typeof value === 'number' && (value & rule.mask) === rule.equals;
+    return value === rule.equals;
+  }
+
+  accept(engineId, rooms, gameEvents, identity) {
     this.engineMatches = engineId === this.map.engine_id;
-    if (!this.engineMatches) return;
+    this.editionMatches = !this.map.edition || (identity?.engine_id === engineId &&
+      identity.game_id === this.map.edition.game_id && identity.index_md5 === this.map.edition.index_md5);
+    if (!this.engineMatches || !this.editionMatches) return;
     // The provider queues rooms and writes separately on the same native clock.
     const records = [...gameEvents, ...rooms].sort((a, b) => a.native_time_ms - b.native_time_ms);
     for (const record of records) {
       if (record.event === 'game_variables_baseline') {
         this.reached.clear();
-        this.variablesAvailable = this.variableMilestones.every(({ when }) =>
-          typeof record.banks[when.bank]?.[when.index] === typeof when.equals);
-        if (this.variablesAvailable) for (const { id, when } of this.variableMilestones) {
-          if (record.banks[when.bank][when.index] === when.equals) this.reached.add(id);
-        }
+        this.room = undefined;
+        this.banks = structuredClone(record.banks);
+        this.variablesAvailable = this.variableRules.every(rule =>
+          typeof this.banks[rule.bank]?.[rule.index] === typeof (rule.equals ?? rule.one_of[0]));
       } else if (record.event === 'game_variables_change') {
-        if (this.variablesAvailable) for (const { id, when } of this.variableMilestones) {
-          if (record.bank === when.bank && record.index === when.index && record.value === when.equals) this.reached.add(id);
-        }
+        if (this.banks) this.banks[record.bank][record.index] = record.value;
       } else {
-        this.roomsAvailable = true;
-        for (const { id, when } of this.roomMilestones) {
-          if (record.room_id === when.room_id &&
-            (when.room_ready === undefined || record.room_ready === when.room_ready)) this.reached.add(id);
+        this.room = record;
+      }
+      for (const milestone of this.map.milestones) {
+        // A bank write can match independently without reusing a stale room sample.
+        if (this.variablesAvailable && this.matches(milestone.when, record.event ? undefined : record)) {
+          this.reached.add(milestone.id);
         }
       }
     }
@@ -79,14 +111,27 @@ class GameProgress {
     const { game, milestones } = this.map;
     const info = { game, total: milestones.length };
     if (this.engineMatches === false) return { ...info, state: 'unavailable', reason: 'engine_mismatch' };
+    if (this.editionMatches === false) return { ...info, state: 'unavailable', reason: 'edition_mismatch' };
     if (!this.variablesAvailable) return { ...info, state: 'unavailable', reason: 'missing_game_variables' };
-    if (!this.variableMilestones.length && !this.roomsAvailable) {
+    if (!this.variableRules.length && !this.room) {
       return { ...info, state: 'unavailable', reason: 'missing_room_telemetry' };
     }
-    const reached = milestones.filter(({ id }) => this.reached.has(id));
+    const reached = this.earnedMilestones;
     return { ...info, state: 'tracked', completed: reached.length,
       percent: Math.round(reached.length * 100 / milestones.length),
       latest_milestone: reached.at(-1)?.label ?? null,
       reached: reached.map(({ id }) => id) };
+  }
+
+  get nextMilestone() {
+    const reached = this.earnedMilestones;
+    return this.map.milestones.find(milestone => !reached.includes(milestone))?.label ?? null;
+  }
+
+  get earnedMilestones() {
+    const { milestones, scoring } = this.map;
+    return scoring === 'highest_stage'
+      ? milestones.slice(0, milestones.findLastIndex(({ id }) => this.reached.has(id)) + 1)
+      : milestones.filter(({ id }) => this.reached.has(id));
   }
 }

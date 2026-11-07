@@ -14,6 +14,7 @@ import { installDisplayObserver, displayBounds, captureBounds } from './display.
 import { claimDataDir } from './instances.js';
 import { readLibrary, validateZipPaths, importZipFiles, saveLibrary, launchReattachedGame } from './library.js';
 import { enableEvaluation, readEvaluation, RunEvaluation } from './evaluation.js';
+import { readGameTelemetry, telemetryReport } from './telemetry.js';
 import { installAudioControl } from './audio.js';
 
 export const games = [
@@ -83,6 +84,7 @@ export class GameRuntime {
     this.closing = false;
     this.shutdownSignal = new AbortController();
     this.evaluation = options.evaluation;
+    this.telemetryEnabled = Boolean(options.telemetry);
   }
 
   status() {
@@ -105,6 +107,12 @@ export class GameRuntime {
       libraryImport: this.libraryImport && { state: this.libraryImport.state, job_id: this.libraryImport.job_id,
         file_count: this.libraryImport.file_count, summary: this.libraryImport.summary, error: this.libraryImport.error },
       recentActions: this.actions.slice(-8), capabilities: ['click', 'move', 'key', 'drag', 'wait', 'screenshot', 'sequences', 'frame-history', 'spectator'] };
+  }
+
+  get spectatorProgress() {
+    const evaluation = this.sessionEvaluation;
+    if (this.phase !== 'ready' || evaluation?.progress?.state !== 'tracked' || evaluation.result?.success === false) return;
+    return { percent: evaluation.progress.percent, nextMilestone: evaluation.progressTracker.nextMilestone };
   }
 
   async log(type, payload = {}) {
@@ -183,6 +191,7 @@ export class GameRuntime {
       this.logPath = path.join(this.dataDir, 'runs', `${this.sessionId}.jsonl`);
       const catalogGame = games.find(entry => entry.slug === game);
       const url = new URL(`/${game}/play`, this.baseUrl);
+      if (this.telemetryEnabled) url.searchParams.set('telemetry', '1');
       if (mode === 'skip_intro' && catalogGame?.skipIntro) url.hash = 'seed=0';
       if (mode === 'continue') url.hash = 'continue';
       this.gameUrl = url.toString();
@@ -582,6 +591,22 @@ export class GameRuntime {
     });
   }
 
+  async telemetry({ session_id: sessionId, bank, offset, limit }) {
+    if (!this.telemetryEnabled) throw new Error('Launch this server with --telemetry to query game state');
+    if (sessionId !== this.sessionId) throw new Error('Session ID does not match the current game');
+    if (!bank && (offset !== undefined || limit !== undefined)) throw new Error('offset and limit require a bank');
+    const session = { session_id: sessionId, game: this.game };
+    const query = { bank, offset, limit };
+    if (this.phase === 'loading') return { ...session, ...telemetryReport(undefined, query), state: 'pending' };
+    const { shell } = this;
+    const isCurrent = () => sessionId === this.sessionId && shell === this.shell && this.phase === 'ready';
+    await this.assertReady(sessionId);
+    if (!isCurrent()) throw new Error('Session changed during telemetry read');
+    const payload = await bounded(shell.evaluate(readGameTelemetry), 2000, 'Game telemetry read timed out');
+    if (!isCurrent()) throw new Error('Session changed during telemetry read');
+    return { ...session, ...telemetryReport(payload, query) };
+  }
+
   async pollEvaluation() {
     const evaluation = this.sessionEvaluation;
     if (!evaluation || evaluation.result || this.phase !== 'ready') return;
@@ -592,7 +617,8 @@ export class GameRuntime {
       try {
         const payload = await bounded(shell.evaluate(readEvaluation), 2000, 'Evaluator could not read engine telemetry');
         if (!isCurrent()) return;
-        const hasTelemetry = payload.current || (!evaluation.requiresRoomTelemetry && payload.gameVariableEvents != null);
+        const hasTelemetry = evaluation.requiresRoomTelemetry ? payload.current
+          : payload.gameVariableEvents != null || (!evaluation.gamePredicates.length && (payload.current || payload.identity));
         if (!hasTelemetry && performance.now() - this.evaluationReadyAt > 5000) {
           throw new Error('This game runtime does not provide evaluation variables; rebuild with the supported engine hook');
         }

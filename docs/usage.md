@@ -14,6 +14,33 @@ codex mcp add agentscumm -- node "$PWD/src/index.js" --no-viewer
 
 `node src/index.js` runs the stdio server directly. Its stdout is reserved for MCP protocol messages. It does not launch a game until a client calls `session` with `operation: "start"`.
 
+### Query native game state
+
+Start the MCP server with `node src/index.js --telemetry` and point `--base-url`
+at a ScummWEB build with the telemetry query API. AgentSCUMM requests
+`?telemetry=1` when launching a game through `session`.
+Call the read-only `telemetry` tool with its `session_id` to get the detected
+game identity, current room where the engine exposes one, and available bank
+names and lengths. The tool works independently of progress maps.
+
+To read a bank, supply its name and optionally a zero-based `offset` and
+`limit`. For example, after discovering a `script_vars` bank, call
+`telemetry({session_id, bank: "script_vars", offset: 0, limit: 16})`.
+The default page is 64 values and the maximum is 256. Keyed banks have
+`keyed: true` in their metadata and return sorted `keys` alongside their
+`values`. SCI values that refer to VM objects are `null` at their original
+indices. Names, keys and indices are specific to the engine, game and edition.
+
+The query reports `pending` during launch, `available` when a room or bank
+has been sampled, and `unavailable` when neither is present. In any response
+`room: null` and `banks: []` mean those fields are unavailable. A room
+reported by name can have a null numeric ID. Some engines
+expose just one of them or publish only after entering gameplay. Each sample
+carries its runtime timestamp so callers can tell when it changes. Sampling
+can miss values that change between engine ticks. The tool is only enabled
+for a server explicitly launched with `--telemetry`. Ordinary gameplay
+observations and the spectator do not expose raw values.
+
 ## Evaluator telemetry and stop conditions
 
 The launcher accepts an evaluator-only condition before the MCP client starts a
@@ -39,8 +66,9 @@ accept `engine_id` (string), `room_id` (integer), `room_name` (string), and
 `native_time_ms`. Any evaluation option enables telemetry. Omit
 `--stop-condition` to record variables without a success trigger.
 
-This requires ScummWEB's opt-in Queen evaluation hook. Existing deployments
-without that hook, and engines without a provider, fail evaluation explicitly
+This requires ScummWEB's opt-in evaluation hooks. Engine identity is available
+for all games on a supporting runtime. Queen and SCUMM provide room and variable
+telemetry. When a stop condition requires missing telemetry, evaluation fails
 after five seconds of ready gameplay. No screenshot matching or inferred room
 IDs substitute for missing telemetry. Pin the engine/game data build when
 comparing trials. `room_ready` means the engine has presented an update with no
@@ -116,11 +144,18 @@ has seven milestones for the English DOS talkie edition. Six are game variables
 and the seventh is room 110, the start of the ending credits. The credits are
 observed during a cutaway, so the rule accepts `room_ready: false`.
 
+The Last Crusade map tracks seven milestones for the English Amiga edition.
+The final milestone requires the surviving ending outcome at the credits.
+
 Progress includes the count, total, rounded percentage, and furthest milestone
 reached in map order. A restored save rebuilds the score from its variables.
 Each milestone counts once on that save timeline. When the runtime lacks the
 required variables, progress is reported as unavailable. This percentage counts
 story milestones and does not estimate time remaining.
+
+When progress is available, the spectator footer shows the percentage and the
+first milestone still to reach. At 100%, it shows the percentage alone. This
+summary appears in the spectator, outside game screenshots and MCP results.
 
 To watch progress without automatically stopping the game, supply
 `--evaluation-log /absolute/run/variables.jsonl` and omit `--stop-condition`.

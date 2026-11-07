@@ -12,14 +12,34 @@ const html = `<!doctype html><html lang="en"><meta charset="utf-8">
 body{display:grid;grid-template-rows:minmax(0,1fr) 24px}
 #screen{display:block;width:100%;height:100%;object-fit:contain;image-rendering:pixelated;user-select:none;pointer-events:none}
 #screen[hidden]{display:none}
-footer{grid-row:2;display:flex;align-items:center;justify-content:space-between;padding:0 10px;background:#171717;color:#bbb;font:12px/24px system-ui,sans-serif;font-variant-numeric:tabular-nums}
+footer{grid-row:2;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 10px;background:#171717;color:#bbb;font:12px/24px system-ui,sans-serif;font-variant-numeric:tabular-nums}
+footer>span,#sound,#progress-value{flex:none;white-space:nowrap}
+#story-progress{display:flex;min-width:0}
+#story-progress[hidden]{display:none}
+#next-milestone{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:pre}
 #sound{height:22px;padding:0 5px;border:0;border-radius:3px;background:transparent;color:inherit;font:inherit;line-height:22px;cursor:pointer}
 #sound:hover{background:#333;color:#fff}#sound:focus-visible{outline:1px solid #bbb;outline-offset:-1px}#sound[aria-pressed="true"]{color:#fff}#sound:disabled{cursor:wait;opacity:.6}
-</style><canvas id="screen" aria-label="Live game screen" hidden></canvas><footer><span>Actions: <span id="actions">0</span></span><button id="sound" type="button" aria-label="Game sound" aria-pressed="false" title="Turn sound on">Sound off</button></footer>
+</style>
+<canvas id="screen" aria-label="Live game screen" hidden></canvas>
+<footer>
+ <span>Actions: <span id="actions">0</span></span>
+ <div id="story-progress" role="status" hidden><span id="progress-value"></span><span id="next-milestone"></span></div>
+ <button id="sound" type="button" aria-label="Game sound" aria-pressed="false" title="Turn sound on">Sound off</button>
+</footer>
 <script>
 let lastId, gameTitle='AgentSCUMM';
 const screen=document.getElementById('screen'),context=screen.getContext('2d');
 const sound=document.getElementById('sound');
+const storyProgress=document.getElementById('story-progress');
+const progressValue=document.getElementById('progress-value'),nextMilestone=document.getElementById('next-milestone');
+function showProgress(progress){
+ const percent=progress?progress.percent+'%':'';
+ const next=progress?.nextMilestone?' · Next: '+progress.nextMilestone:'';
+ if(progressValue.textContent!==percent)progressValue.textContent=percent;
+ if(nextMilestone.textContent!==next)nextMilestone.textContent=next;
+ storyProgress.hidden=!progress;
+ storyProgress.title=percent+next;
+}
 function showSound(enabled){
  sound.textContent=enabled?'Sound on':'Sound off';sound.setAttribute('aria-pressed',String(enabled));
  sound.title=enabled?'Turn sound off':'Turn sound on';
@@ -38,6 +58,7 @@ async function refresh(){
   const response=await fetch('status',{cache:'no-store'});if(!response.ok)throw Error('Session unavailable');
   const state=await response.json();
   document.getElementById('actions').textContent=String(state.actionSequences??0);
+  showProgress(state.progress);
   if(!sound.disabled)showSound(state.soundEnabled===true);
   const name=state.game?state.game.split('-').map((word,index)=>index>0&&['a','an','and','of','the','in'].includes(word)?word:word.charAt(0).toUpperCase()+word.slice(1)).join(' '):null;
   gameTitle=(name?'AgentSCUMM - '+name:'AgentSCUMM')+' ['+state.instanceLabel+']';document.title=gameTitle;
@@ -110,7 +131,8 @@ export class SpectatorViewer {
       else if (route === 'status') {
         const frame = this.runtime.history.latest();
         response.setHeader('Content-Type', 'application/json');
-        response.end(JSON.stringify({ ...this.runtime.status(), frame: frame ? frameInfo(frame) : null }));
+        response.end(JSON.stringify({ ...this.runtime.status(), frame: frame ? frameInfo(frame) : null,
+          progress: this.runtime.spectatorProgress }));
       }
       else if (route.startsWith('frame/')) {
         const frame = this.runtime.history.get(route.slice(6));

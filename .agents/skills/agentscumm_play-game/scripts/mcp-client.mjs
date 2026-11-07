@@ -12,7 +12,7 @@ const { values } = parseArgs({ options: {
   'run-dir': { type: 'string' }, resume: { type: 'boolean', default: false },
   'no-viewer': { type: 'boolean', default: false }, 'base-url': { type: 'string' },
   'stop-condition': { type: 'string' }, 'evaluation-log': { type: 'string' },
-  'result-file': { type: 'string' }, 'telemetry-ms': { type: 'string' },
+  'result-file': { type: 'string' }, 'telemetry-ms': { type: 'string' }, telemetry: { type: 'boolean' },
 } });
 if (!values['run-dir']) throw new Error('Provide --run-dir inside .internal/<game-id>/<run-id>/');
 const runDir = path.resolve(root, values['run-dir']);
@@ -41,6 +41,7 @@ const client = new Client({ name: 'agentscumm_play-game', version: '1.0' });
 const serverArgs = [path.join(root, 'src/index.js'), '--data-dir', browserDir];
 if (values['no-viewer']) serverArgs.push('--no-viewer');
 if (values['base-url']) serverArgs.push('--base-url', values['base-url']);
+if (values.telemetry) serverArgs.push('--telemetry');
 for (const option of ['stop-condition', 'evaluation-log', 'result-file', 'telemetry-ms']) {
   if (values[option] !== undefined) serverArgs.push(`--${option}`, values[option]);
 }

@@ -8,6 +8,53 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { startFixture } from './fixture.js';
 
+test('opt-in telemetry queries unmapped games without leaking state into player tools', { timeout: 30000 }, async t => {
+  const fixture = await startFixture({ telemetry: true, startupDelay: 1500 });
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-telemetry-'));
+  const client = new Client({ name: 'telemetry-test', version: '1.0' });
+  t.after(async () => { await client.close(); await fixture.close(); await rm(dataDir, { recursive: true, force: true }); });
+  await client.connect(new StdioClientTransport({ command: process.execPath,
+    args: ['src/index.js', '--no-viewer', '--telemetry', '--base-url', fixture.url, '--data-dir', dataDir] }));
+  const tool = (await client.listTools()).tools.find(tool => tool.name === 'telemetry');
+  assert.equal(tool.annotations.readOnlyHint, true);
+  const call = (name, args = {}) => client.callTool({ name, arguments: args });
+  const read = async (name, args) => {
+    const result = await call(name, args);
+    assert.ok(!result.isError, result.content[0].text);
+    return JSON.parse(result.content[0].text);
+  };
+  const { sessionId: session_id } = await read('session', { operation: 'start', game: 'unmapped' });
+  assert.equal((await read('telemetry', { session_id })).state, 'pending');
+  const status = await read('status', { wait_ms: 10000 });
+  assert.equal(status.phase, 'ready');
+  assert.doesNotMatch(JSON.stringify(status), /room_id|game_identity|sample_time_ms/);
+  const metadata = await read('telemetry', { session_id });
+  assert.deepEqual(metadata, { session_id, game: 'unmapped', game_identity: { engine_id: 'fixture', game_id: 'unmapped' },
+    state: 'available', room: { id: 17, sample_time_ms: 123 },
+    banks: [{ name: 'vars', length: 5 }, { name: 'globals', length: 2, keyed: true }] });
+  assert.deepEqual((await read('telemetry', { session_id, bank: 'globals', limit: 1 })).selection,
+    { bank: 'globals', available: true, offset: 0, keys: ['score'], values: [1.5], sample_time_ms: 123 });
+  const args = { session_id, bank: 'vars', offset: 2, limit: 2 };
+  assert.deepEqual((await read('telemetry', args)).selection,
+    { bank: 'vars', available: true, offset: 2, values: [-8, null], sample_time_ms: 123 });
+  assert.deepEqual((await read('telemetry', { session_id, bank: 'unknown' })).selection, { bank: 'unknown', available: false });
+  assert.equal((await call('telemetry', { session_id, offset: 1 })).isError, true);
+  const acted = await call('act', { session_id, request_id: 'change-state', actions: [{ type: 'click', x: 50, y: 50 }] });
+  assert.equal(acted.isError, false);
+  const changed = await read('telemetry', args);
+  assert.equal(changed.room.id, 18);
+  assert.deepEqual(changed.selection.values, [4, null]);
+
+  const replacement = await read('session', { operation: 'start', game: 'identity-only' });
+  assert.equal((await call('telemetry', { session_id })).isError, true);
+  assert.equal((await read('status', { wait_ms: 10000 })).phase, 'ready');
+  const unavailable = await read('telemetry', { session_id: replacement.sessionId });
+  assert.equal(unavailable.state, 'unavailable');
+  assert.deepEqual(unavailable.game_identity, metadata.game_identity);
+  assert.equal(unavailable.room, null);
+  assert.deepEqual(unavailable.banks, []);
+});
+
 test('stdio MCP returns actual images, sequence outcomes and history', { timeout: 40000 }, async t => {
   const fixture = await startFixture();
   const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-mcp-'));

@@ -8,6 +8,7 @@ import { actionSchema } from './actions.js';
 import { imageContent } from './history.js';
 import path from 'node:path';
 import { RunEvaluation, evaluationReporter } from './evaluation.js';
+import { telemetryQuery } from './telemetry.js';
 
 const { values } = parseArgs({ options: {
   'no-viewer': { type: 'boolean', default: false },
@@ -15,7 +16,7 @@ const { values } = parseArgs({ options: {
   width: { type: 'string' }, height: { type: 'string' }, fps: { type: 'string' },
   'buffer-seconds': { type: 'string' },
   'stop-condition': { type: 'string' }, 'evaluation-log': { type: 'string' },
-  'result-file': { type: 'string' }, 'telemetry-ms': { type: 'string' },
+  'result-file': { type: 'string' }, 'telemetry-ms': { type: 'string' }, telemetry: { type: 'boolean' },
 } });
 const evaluationEnabled = ['stop-condition', 'evaluation-log', 'result-file', 'telemetry-ms'].some(key => values[key] !== undefined);
 const evaluation = evaluationEnabled ? new RunEvaluation({ condition: values['stop-condition'],
@@ -23,7 +24,8 @@ const evaluation = evaluationEnabled ? new RunEvaluation({ condition: values['st
 const runtime = new GameRuntime({ viewer: !values['no-viewer'], baseUrl: values['base-url'],
   dataDir: values['data-dir'], instance: values.instance, width: values.width ? Number(values.width) : undefined,
   height: values.height ? Number(values.height) : undefined, fps: values.fps ? Number(values.fps) : undefined,
-  bufferSeconds: values['buffer-seconds'] ? Number(values['buffer-seconds']) : undefined, evaluation });
+  bufferSeconds: values['buffer-seconds'] ? Number(values['buffer-seconds']) : undefined, evaluation,
+  telemetry: values.telemetry });
 const evaluationLog = path.resolve(values['evaluation-log'] || path.join(runtime.dataDir, 'evaluation.jsonl'));
 const resultFile = path.resolve(values['result-file'] || path.join(runtime.dataDir, 'result.json'));
 const reporter = evaluation ? await evaluationReporter(evaluationLog, resultFile) : undefined;
@@ -74,6 +76,11 @@ tool('session', 'Manage the owned game session: start returns immediately; close
 tool('status', 'Check renderer/runtime health, startup progress, connection, history coverage, spectator and recent actions. Optional wait_ms waits up to 25 seconds while loading. Ready means rendered startup content; inspect the screen for menus or intros.', {
   wait_ms: z.number().int().min(0).max(25000).default(0),
 }, async ({ wait_ms }) => ({ content: [text(await runtime.waitReady(wait_ms))] }), true);
+
+if (values.telemetry) {
+  tool('telemetry', 'Query native room and variable bank metadata for the current session. Choose a bank to read a bounded page of indexed values or sorted keys and values. Availability depends on the engine and game state.', telemetryQuery,
+    async args => ({ content: [text(await runtime.telemetry(args))] }), true);
+}
 
 tool('observe', 'Read game images without input. fresh (default) captures now, including loading/error screens; frames retrieves 1–8 exact frame_ids; history samples recent frames using seconds/count or action_id. Unavailable frames are errors, never replaced by fresh images. Loading/error captures are unbuffered.', {
   source: z.enum(['fresh', 'frames', 'history']).default('fresh'),

@@ -1,0 +1,41 @@
+schema_version: 1
+game: indiana-jones-and-the-last-crusade
+engine_id: scumm
+edition:
+  game_id: indy3
+  # English Amiga/EGA index.
+  index_md5: 9c0fee288ad564a7d25ec3e841810d79
+scoring: highest_stage
+milestones:
+  - id: departed-barnett
+    label: Left Barnett for the Grail search
+    when: { bank: scumm_vars, index: 94, mask: 0x0020, equals: 0x0020 }
+  - id: castle-brunwald
+    label: Reached Castle Brunwald
+    when:
+      any:
+        - { room_id: 12 }
+        - { bank: object_state, index: 156, equals: 1 }
+  - id: henry-out-of-cell
+    label: Got Henry out of his cell
+    when: { bank: scumm_vars, index: 92, mask: 0x8000, equals: 0x8000 }
+  - id: grail-temple
+    label: Reached the Grail Temple
+    when: { bank: scumm_vars, index: 93, mask: 0x4000, equals: 0x4000 }
+  - id: grail-knight
+    label: Passed the trials and reached the Grail Knight
+    when: { bank: scumm_vars, index: 95, mask: 0x0004, equals: 0x0004 }
+  - id: true-grail
+    label: Chose the true Grail and returned to Henry
+    when:
+      all:
+        - { bank: scumm_vars, index: 94, mask: 0x0001, equals: 0x0001 }
+        - { bank: scumm_vars, index: 95, mask: 0x0008, equals: 0x0008 }
+  - id: surviving-ending
+    label: Reached the ending with Indy alive
+    when:
+      all:
+        - { room_id: 94 }
+        # Outcome 2 also enters the credits after Indy dies at the seal.
+        - { bank: scumm_vars, index: 99, one_of: [1, 3, 4] }
+        - { milestone: true-grail }

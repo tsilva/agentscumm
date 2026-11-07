@@ -22,20 +22,29 @@ focused checks with `node --test test/evaluation.test.js test/play-game-client.t
 Game variable coverage also verifies ordered writes between polls, save
 baselines, invalid providers and slots, and the matching snapshot in a
 launcher receipt.
+The stdio MCP checks cover opt-in telemetry on unmapped games, bank paging,
+state changes, unsupported providers, stale session IDs and isolation from
+ordinary player responses.
 When diagnosing timing failures under competing browser/build load, run the
 suite with `node --test --test-concurrency=1 test/*.test.js`, then
 `pnpm test:export`. The synthetic checks do not establish the room mapping or
 arrival timing of a real game; verify that through MCP against the pinned native
 provider before treating a new endpoint as a benchmark.
 
-Progress maps live in `src/progress-maps/<game-slug>.json`. The evaluator loads
-the map for the launched slug. Define `schema_version: 1`, `game`, `engine_id`,
+The evaluator loads `src/progress-maps/<game-slug>.yaml` for the launched slug.
+Define `schema_version: 1`, `game`, `engine_id`,
 and ordered `milestones` with unique IDs and display labels. Each `when` rule
 matches a typed `{bank, index, equals}` or a `{room_id}` with optional
-`room_ready`. Verify rules against the target edition and test restores,
+`room_ready`. Rules can use masks, `one_of`, `all`, `any`, and references to
+earlier milestones. Edition-specific maps require the native game ID and
+index MD5. For `highest_stage` maps, the furthest verified milestone counts
+the earlier stages even when the player took a route that bypassed them.
+Verify rules against the target edition and test restores,
 alternate paths, and the live ending before adding a completion milestone.
 Mapped games record milestone changes in their private session logs for
 benchmark export. Progress tracking runs independently of stop conditions.
+Draft maps in `src/progress-maps/drafts/` are research configs outside runtime
+scoring. They can describe predicates that still need provider or evaluator support.
 
 `pnpm test:live` launches Flight of the Amazon Queen on the configured live site through stdio MCP, opens the spectator, checks screenshot dimensions, exercises click/key/wait sequences and retry behavior, and retrieves frame history. It uses an isolated temporary profile and closes its browser processes afterward. It does not solve the game. Local verification captures stay under ignored `.internal/`.
 

@@ -54,6 +54,7 @@ export function readEvaluation() {
   if (globalThis.__scummwebEvaluationOverflow) throw new Error('Evaluation transition queue overflow');
   if (globalThis.__scummwebEvaluationGameVariableOverflow) throw new Error('Game variable telemetry queue overflow');
   return { current: globalThis.__scummwebEvaluationState ?? null,
+    identity: globalThis.__scummwebEvaluationGame ?? null,
     events: (globalThis.__scummwebEvaluationEvents ?? []).splice(0),
     gameVariableEngine: globalThis.__scummwebEvaluationGameVariableEngine ?? null,
     gameVariableEvents: globalThis.__scummwebEvaluationGameVariableEvents?.splice(0) ?? null };
@@ -144,14 +145,15 @@ export class RunEvaluation extends EventEmitter {
       if (variables.native_time_ms < nativeTime) throw new Error('Evaluation native clock moved backwards');
       nativeTime = variables.native_time_ms;
     }
-    const engineId = payload.gameVariableEngine ?? current?.engine_id;
+    const identity = payload.identity;
+    const engineId = payload.gameVariableEngine ?? current?.engine_id ?? identity?.engine_id;
     if (current && engineId !== current.engine_id) throw new Error('Evaluation engine identities disagree');
     const game = this.acceptGameVariables(payload.gameVariableEvents, engineId);
     this.lastNativeTime = nativeTime;
     for (const event of game?.events ?? []) {
       this.emit('telemetry', { ...event, timestamp: new Date().toISOString(), engine_id: engineId });
     }
-    const latest = current ?? (this.gameVariables && { engine_id: this.gameVariableEngine });
+    const latest = current ?? (engineId && { engine_id: engineId });
     const candidates = samples.length || !latest ? samples : [latest];
     const variables = this.gamePredicates.length ? (game?.match && latest) :
       candidates.find(sample => this.condition?.all.every(({ variable, equals }) => sample[variable] === equals));
@@ -166,7 +168,7 @@ export class RunEvaluation extends EventEmitter {
         samples.slice(0, matchedRoom + 1);
       const progressEvents = matchedWrite ? events.slice(0, events.indexOf(matchedWrite) + 1) :
         events.filter(event => event.native_time_ms <= stopTime);
-      this.progressTracker.accept(engineId, progressRooms, progressEvents);
+      this.progressTracker.accept(engineId, progressRooms, progressEvents, identity);
       const progress = this.progressTracker.report();
       progressChanged = JSON.stringify(progress) !== JSON.stringify(this.progress);
       if (progressChanged) this.progress = progress;
@@ -183,6 +185,7 @@ export class RunEvaluation extends EventEmitter {
     if (latest && (progressChanged || performance.now() - this.lastPublished >= this.intervalMs)) {
       this.lastPublished = performance.now();
       this.emit('telemetry', { event: 'variables', timestamp: new Date().toISOString(), variables: latest,
+        ...(identity && { game_identity: identity }),
         ...(this.gameVariables && { game_variables: this.gameVariables }), ...progressReport });
     }
   }

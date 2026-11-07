@@ -83,7 +83,8 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   assert.equal(await runtime.viewer.page.locator('header').count(), 0);
   assert.equal(await runtime.viewer.page.locator('button').count(), 1);
   await runtime.viewer.page.waitForFunction(count => document.getElementById('actions').textContent === String(count), runtime.status().actionSequences);
-  assert.match(await runtime.viewer.page.locator('footer').textContent(), /^Actions: \d+Sound off$/);
+  assert.match((await runtime.viewer.page.locator('footer').textContent()).trim().replace(/\s+/g, ' '), /^Actions: \d+ Sound off$/);
+  assert.equal(await runtime.viewer.page.locator('#story-progress').isHidden(), true);
   const sound = runtime.viewer.page.getByRole('button', { name: 'Game sound', exact: true });
   assert.equal(await sound.getAttribute('aria-pressed'), 'false');
   const soundBounds = await sound.boundingBox();

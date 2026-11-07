@@ -89,6 +89,48 @@ test('progress stays unavailable without a bank and a stop ignores later room re
   assert.equal(newSession.progress, undefined);
 });
 
+test('Last Crusade scores the credits by outcome and rebuilds progress on restore', async () => {
+  const evaluation = new RunEvaluation();
+  await evaluation.beginSession('indiana-jones-and-the-last-crusade');
+  const identity = { engine_id: 'scumm', game_id: 'indy3', index_md5: '9c0fee288ad564a7d25ec3e841810d79' };
+  const globals = Array(100).fill(0);
+  const objects = Array(157).fill(0);
+  globals[94] = 0x0081;
+  globals[95] = 0x0008;
+  function accept(room, time, changes, game = identity) {
+    evaluation.accept({ identity: game, current: { ...state(room, time, false), engine_id: 'scumm' },
+      events: [], gameVariableEngine: 'scumm', gameVariableEvents: changes });
+  }
+  const baseline = time => ({ event: 'game_variables_baseline', native_time_ms: time,
+    banks: { scumm_vars: globals, object_state: objects } });
+  const outcome = (time, previous, value) => ({ event: 'game_variables_change', native_time_ms: time,
+    bank: 'scumm_vars', index: 99, previous, value });
+  accept(82, 1, [baseline(1)], { ...identity, index_md5: '0'.repeat(32) });
+  assert.equal(evaluation.progress.reason, 'edition_mismatch');
+  accept(82, 2, [baseline(2)]);
+  assert.equal(evaluation.progress.completed, 6);
+  accept(94, 3, [outcome(3, 0, 2)]);
+  assert.equal(evaluation.progress.completed, 6);
+  accept(82, 4, [outcome(4, 2, 4)]);
+  assert.equal(evaluation.progress.completed, 6, 'An outcome update must not match the previous credits room');
+  accept(94, 5, []);
+  assert.equal(evaluation.progress.completed, 7);
+  assert.equal(evaluation.progressTracker.nextMilestone, null);
+  globals.fill(0);
+  objects[156] = 1;
+  accept(22, 6, [baseline(6)]);
+  assert.equal(evaluation.progress.completed, 2);
+  assert.equal(evaluation.progressTracker.nextMilestone, 'Got Henry out of his cell');
+  objects[156] = 0;
+  accept(22, 7, [baseline(7)]);
+  assert.equal(evaluation.progress.completed, 0);
+  accept(22, 10, [
+    { event: 'game_variables_change', native_time_ms: 8, bank: 'object_state', index: 156, previous: 0, value: 1 },
+    { event: 'game_variables_change', native_time_ms: 9, bank: 'object_state', index: 156, previous: 1, value: 0 },
+  ]);
+  assert.equal(evaluation.progress.completed, 2, 'A bank-only branch can match between room samples');
+});
+
 test('game variable transitions ignore restored values and retain the matching snapshot', () => {
   const evaluation = new RunEvaluation({ condition: variableCondition });
   const records = [];
@@ -161,22 +203,41 @@ test('missing engine telemetry fails explicitly without a visual fallback', { ti
   assert.match(result.error, /does not provide evaluation variables/);
 });
 
-test('normal play records mapped progress in the private session log', { timeout: 20000 }, async t => {
+test('normal play logs progress and updates the spectator footer', { timeout: 20000 }, async t => {
   const fixture = await startFixture({ evaluation: 'progress' });
   const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-progress-'));
   const runtime = new GameRuntime({ baseUrl: fixture.url, dataDir, viewer: false });
   t.after(async () => { await runtime.close(); await fixture.close(); await rm(dataDir, { recursive: true, force: true }); });
   const { sessionId } = await runtime.start();
   await runtime.waitReady(10000);
+  await runtime.viewer.open({ headless: true });
+  const viewer = runtime.viewer.page;
+  const expectFooter = text => viewer.waitForFunction(expected => {
+    const progress = document.getElementById('story-progress');
+    return !progress.hidden && progress.textContent === expected;
+  }, text);
+  await expectFooter('0% · Next: Reached the crash site');
   await runtime.act({ session_id: sessionId, request_id: 'first-milestone',
     actions: [{ type: 'click', x: 50, y: 50 }] });
+  await expectFooter('14% · Next: Opened the jungle river crossing');
   const rows = (await readFile(path.join(dataDir, 'runs', `${sessionId}.jsonl`), 'utf8')).trim().split('\n').map(JSON.parse);
   const samples = rows.filter(row => row.type === 'progress');
   assert.ok(samples.every(row => row.sessionId === sessionId));
   assert.deepEqual(samples.at(-1).progress, { game: queenSlug, total: 7, state: 'tracked',
     completed: 1, percent: 14, latest_milestone: 'Reached the crash site', reached: ['hotel-escape'] });
   assert.equal(runtime.status().phase, 'ready');
-  assert.doesNotMatch(JSON.stringify(runtime.status()), /latest_milestone|game_state|room_id/);
+  assert.doesNotMatch(JSON.stringify(runtime.status()), /latest_milestone|nextMilestone|game_state|room_id/);
+
+  const publish = (bank, room) => runtime.shell.evaluate(({ bank, room }) => {
+    globalThis.__scummwebEvaluationGameVariableEvents.push({ ...bank, native_time_ms: performance.now() });
+    globalThis.__scummwebEvaluationState = { ...room, native_time_ms: performance.now() };
+  }, { bank, room });
+  await publish(progressBaseline(0, [[3, 1], [101, 1], [123, 2], [41, 2], [67, 2], [105, 1]]), state(110, 0, false));
+  await expectFooter('100%');
+  await publish(progressBaseline(0), state(70, 0));
+  await expectFooter('0% · Next: Reached the crash site');
+  await runtime.closeGame();
+  await viewer.locator('#story-progress').waitFor({ state: 'hidden' });
 });
 
 test('launcher accepts a variable-only provider and keeps receipts and telemetry off stdout', { timeout: 30000 }, async t => {
