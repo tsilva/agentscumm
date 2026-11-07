@@ -6,13 +6,39 @@ import { z } from 'zod';
 
 const fields = { engine_id: z.string().min(1).max(80), room_id: z.number().int().min(0),
   room_name: z.string().max(200), room_ready: z.boolean() };
-const predicate = z.object({ variable: z.enum(Object.keys(fields)),
+const roomPredicate = z.object({ variable: z.enum(Object.keys(fields)),
   equals: z.union([z.string(), z.number().finite(), z.boolean()]) }).strict().superRefine((value, ctx) => {
   if (!fields[value.variable].safeParse(value.equals).success) ctx.addIssue({ code: 'custom', message: 'Condition value has the wrong type' });
 });
-export const conditionSchema = z.object({ all: z.array(predicate).min(1).max(16) }).strict();
+const bankName = z.string().regex(/^[a-z][a-z0-9_]{0,39}$/);
+const slot = z.number().int().min(0).max(4095);
+const gameValue = z.union([z.number().int(), z.boolean()]);
+const gamePredicate = z.object({ variable: z.string().regex(/^[a-z][a-z0-9_]{0,39}\.(0|[1-9][0-9]{0,3})$/),
+  equals: gameValue, from: gameValue.optional() }).strict().superRefine(({ variable, equals, from }, ctx) => {
+  if (!slot.safeParse(Number(variable.split('.')[1])).success) ctx.addIssue({ code: 'custom', message: 'Invalid game variable index' });
+  if (from !== undefined && (typeof from !== typeof equals || from === equals)) {
+    ctx.addIssue({ code: 'custom', message: 'Transition values must have the same type and differ' });
+  }
+});
+export const conditionSchema = z.object({ all: z.array(z.union([roomPredicate, gamePredicate])).min(1).max(16) }).strict()
+  .superRefine(({ all }, ctx) => {
+    const indexed = all.filter(({ variable }) => variable.includes('.'));
+    if (indexed.length && all.some(({ variable }) => variable !== 'engine_id' && !variable.includes('.'))) {
+      ctx.addIssue({ code: 'custom', message: 'Room predicates cannot be combined with indexed game variables' });
+    }
+    if (indexed.filter(({ from }) => from !== undefined).length > 1) {
+      ctx.addIssue({ code: 'custom', message: 'A condition can require one game variable transition' });
+    }
+  });
+const nativeTime = z.number().finite().nonnegative();
 const variablesSchema = z.object({ schema_version: z.literal(1), ...fields,
-  native_time_ms: z.number().finite().nonnegative() }).strict();
+  native_time_ms: nativeTime }).strict();
+const gameVariableRecords = z.array(z.discriminatedUnion('event', [
+  z.object({ event: z.literal('game_variables_baseline'), native_time_ms: nativeTime,
+    banks: z.record(bankName, z.array(gameValue).min(1).max(4096)) }).strict(),
+  z.object({ event: z.literal('game_variables_change'), native_time_ms: nativeTime, bank: bankName,
+    index: slot, previous: gameValue, value: gameValue }).strict(),
+])).max(256);
 
 export function parseCondition(json) {
   return conditionSchema.parse(typeof json === 'string' ? JSON.parse(json) : json);
@@ -25,43 +51,113 @@ export function enableEvaluation() {
 
 export function readEvaluation() {
   if (globalThis.__scummwebEvaluationOverflow) throw new Error('Evaluation transition queue overflow');
+  if (globalThis.__scummwebEvaluationGameVariableOverflow) throw new Error('Game variable telemetry queue overflow');
   return { current: globalThis.__scummwebEvaluationState ?? null,
-    events: (globalThis.__scummwebEvaluationEvents ?? []).splice(0) };
+    events: (globalThis.__scummwebEvaluationEvents ?? []).splice(0),
+    gameVariableEngine: globalThis.__scummwebEvaluationGameVariableEngine ?? null,
+    gameVariableEvents: globalThis.__scummwebEvaluationGameVariableEvents?.splice(0) ?? null };
 }
 
 export class RunEvaluation extends EventEmitter {
   constructor({ condition, intervalMs = 250 } = {}) {
     super();
     this.condition = condition === undefined ? undefined : parseCondition(condition);
+    this.gamePredicates = (this.condition?.all ?? []).filter(({ variable }) => variable.includes('.')).map(predicate => {
+      const [bank, index] = predicate.variable.split('.');
+      return { ...predicate, bank, index: Number(index) };
+    });
+    this.requiresRoomTelemetry = Boolean(this.condition?.all.some(({ variable }) =>
+      Object.hasOwn(fields, variable) && variable !== 'engine_id'));
     if (!Number.isInteger(intervalMs) || intervalMs < 50 || intervalMs > 5000) throw new Error('Telemetry interval must be 50–5000 ms');
     this.intervalMs = intervalMs;
     this.signal = new AbortController();
     this.startedAt = performance.now();
     this.lastPublished = -Infinity;
     this.lastNativeTime = -Infinity;
+    this.lastGameVariableTime = -Infinity;
+  }
+
+  acceptGameVariables(records, engineId) {
+    if (records == null) {
+      if (this.gamePredicates.length || this.gameVariables) throw new Error('This game runtime does not provide game variable telemetry');
+      return;
+    }
+    if (!fields.engine_id.safeParse(engineId).success) throw new Error('Missing or invalid game variable engine identity');
+    if (this.gameVariableEngine && engineId !== this.gameVariableEngine) throw new Error('Game variable engine changed');
+    const events = gameVariableRecords.parse(records);
+    if (!events.length && this.gameVariables) return;
+    const engineMatches = this.condition?.all.every(({ variable, equals }) => variable !== 'engine_id' || equals === engineId);
+    let banks = structuredClone(this.gameVariables);
+    let nativeTime = this.lastGameVariableTime;
+    let match;
+    for (const event of events) {
+      if (event.native_time_ms < nativeTime) throw new Error('Game variable native clock moved backwards');
+      nativeTime = event.native_time_ms;
+      if (event.event === 'game_variables_baseline') {
+        // Keep the published baseline intact as subsequent writes update the working copy.
+        banks = structuredClone(event.banks);
+        if (!Object.keys(banks).length) throw new Error('Game variable baseline has no banks');
+        if (engineMatches) for (const { bank, index, equals } of this.gamePredicates) {
+          const value = Object.hasOwn(banks, bank) ? banks[bank][index] : undefined;
+          if (typeof value !== typeof equals) throw new Error(`Unavailable or incompatible game variable: ${bank}.${index}`);
+        }
+      } else {
+        const bank = banks && Object.hasOwn(banks, event.bank) ? banks[event.bank] : undefined;
+        if (bank?.[event.index] !== event.previous || event.previous === event.value ||
+          typeof event.previous !== typeof event.value) {
+          throw new Error(`Inconsistent game variable change: ${event.bank}.${event.index}`);
+        }
+        bank[event.index] = event.value;
+      }
+      if (!match && engineMatches && this.gamePredicates.length &&
+        this.gamePredicates.every(({ bank, index, equals, from }) => banks[bank]?.[index] === equals &&
+          (from === undefined || (event.event === 'game_variables_change' &&
+            event.bank === bank && event.index === index && event.previous === from)))) {
+        match = { game_variables: structuredClone(banks), game_variable_match: event };
+      }
+    }
+    if (!banks) throw new Error('Missing game variable baseline');
+    this.gameVariables = banks;
+    this.gameVariableEngine = engineId;
+    this.lastGameVariableTime = nativeTime;
+    return { events, match };
   }
 
   accept(payload) {
     if (this.result) return;
     // Validate the whole read before accepting any of it. Partial malformed telemetry cannot win.
     const current = payload.current === null ? null : variablesSchema.parse(payload.current);
-    const events = z.array(variablesSchema).max(256).parse(payload.events);
-    for (const variables of [...events, ...(current ? [current] : [])]) {
-      if (variables.native_time_ms < this.lastNativeTime) throw new Error('Evaluation native clock moved backwards');
-      this.lastNativeTime = variables.native_time_ms;
-      this.current = variables;
-      if (this.condition?.all.every(({ variable, equals }) => variables[variable] === equals)) {
-        this.result = { event: 'success', success: true, reason: 'stop_condition',
-          detected_at: new Date().toISOString(), elapsed_ms: performance.now() - this.startedAt,
-          condition: this.condition, variables };
-        this.signal.abort(new Error('Stop condition reached'));
-        this.emit('terminal', this.result);
-        return;
-      }
+    const samples = z.array(variablesSchema).max(256).parse(payload.events);
+    if (current) samples.push(current);
+    let nativeTime = this.lastNativeTime;
+    for (const variables of samples) {
+      if (variables.native_time_ms < nativeTime) throw new Error('Evaluation native clock moved backwards');
+      nativeTime = variables.native_time_ms;
     }
-    if (current && performance.now() - this.lastPublished >= this.intervalMs) {
+    const engineId = payload.gameVariableEngine ?? current?.engine_id;
+    if (current && engineId !== current.engine_id) throw new Error('Evaluation engine identities disagree');
+    const game = this.acceptGameVariables(payload.gameVariableEvents, engineId);
+    this.lastNativeTime = nativeTime;
+    for (const event of game?.events ?? []) {
+      this.emit('telemetry', { ...event, timestamp: new Date().toISOString(), engine_id: engineId });
+    }
+    const latest = current ?? (this.gameVariables && { engine_id: this.gameVariableEngine });
+    const candidates = samples.length || !latest ? samples : [latest];
+    const variables = this.gamePredicates.length ? (game?.match && latest) :
+      candidates.find(sample => this.condition?.all.every(({ variable, equals }) => sample[variable] === equals));
+    this.current = variables ?? latest ?? samples.at(-1);
+    if (variables) {
+      this.result = { event: 'success', success: true, reason: 'stop_condition',
+        detected_at: new Date().toISOString(), elapsed_ms: performance.now() - this.startedAt,
+        condition: this.condition, variables, ...game?.match };
+      this.signal.abort(new Error('Stop condition reached'));
+      this.emit('terminal', this.result);
+      return;
+    }
+    if (latest && performance.now() - this.lastPublished >= this.intervalMs) {
       this.lastPublished = performance.now();
-      this.emit('telemetry', { event: 'variables', timestamp: new Date().toISOString(), variables: current });
+      this.emit('telemetry', { event: 'variables', timestamp: new Date().toISOString(), variables: latest,
+        ...(this.gameVariables && { game_variables: this.gameVariables }) });
     }
   }
 

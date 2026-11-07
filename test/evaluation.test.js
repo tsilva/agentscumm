@@ -12,6 +12,8 @@ import { startFixture } from './fixture.js';
 
 const condition = { all: [{ variable: 'engine_id', equals: 'queen' },
   { variable: 'room_id', equals: 71 }, { variable: 'room_ready', equals: true }] };
+const variableCondition = { all: [{ variable: 'engine_id', equals: 'queen' },
+  { variable: 'game_state.93', from: 0, equals: 1 }] };
 const state = (room_id, native_time_ms, room_ready = true) => ({ schema_version: 1,
   engine_id: 'queen', room_id, room_name: 'Synthetic room', room_ready, native_time_ms });
 
@@ -34,6 +36,47 @@ test('strict typed conditions, ordered transient arrivals, and latched success',
   const invalid = new RunEvaluation({ condition });
   assert.throws(() => invalid.accept({ current: state(72, 4), events: [state(71, 3), {}] }));
   assert.equal(invalid.result, undefined, 'Malformed telemetry cannot partially satisfy the goal');
+});
+
+const baseline = (value, native_time_ms) => ({ event: 'game_variables_baseline', native_time_ms,
+  banks: { game_state: [...Array(93).fill(0), value] } });
+const change = (previous, value, native_time_ms) => ({ event: 'game_variables_change', native_time_ms,
+  bank: 'game_state', index: 93, previous, value });
+
+test('game variable transitions ignore restored values and retain the matching snapshot', () => {
+  const evaluation = new RunEvaluation({ condition: variableCondition });
+  const records = [];
+  evaluation.on('telemetry', event => records.push(event));
+  const accept = (...gameVariableEvents) => evaluation.accept({ current: state(70, 10), events: [], gameVariableEvents });
+  accept(baseline(0, 1), baseline(1, 2));
+  assert.equal(evaluation.result, undefined);
+  accept(change(1, 0, 3), change(0, 1, 4), change(1, 0, 5));
+  assert.equal(evaluation.result.game_variables.game_state[93], 1);
+  assert.deepEqual(evaluation.result.game_variable_match, change(0, 1, 4));
+  assert.deepEqual(records.filter(event => event.event === 'game_variables_baseline')
+    .map(event => event.banks.game_state[93]), [0, 1]);
+  assert.deepEqual(records.filter(event => event.event === 'game_variables_change')
+    .map(event => event.value), [0, 1, 0]);
+
+  const equality = new RunEvaluation({ condition: { all: [{ variable: 'game_state.93', equals: 1 }] } });
+  equality.accept({ current: state(70, 10), events: [], gameVariableEvents: [baseline(1, 2)] });
+  assert.equal(equality.result.game_variable_match.event, 'game_variables_baseline');
+});
+
+test('game variable evaluation rejects unavailable slots and inconsistent batches before matching', () => {
+  const payload = { current: state(70, 10), events: [] };
+  const evaluation = new RunEvaluation({ condition: variableCondition });
+  assert.throws(() => evaluation.accept(payload), /does not provide game variable telemetry/);
+  assert.throws(() => evaluation.accept({ ...payload, gameVariableEvents: [baseline(true, 1)] }),
+    /Unavailable or incompatible game variable/);
+  assert.throws(() => evaluation.accept({ ...payload, gameVariableEvents: [baseline(0, 1), change(0, 1, 2), change(0, 2, 3)] }),
+    /Inconsistent game variable change/);
+  assert.equal(evaluation.result, undefined);
+  assert.throws(() => parseCondition({ all: [{ variable: 'game_state.4096', equals: 1 }] }), /Invalid game variable index/);
+  assert.throws(() => parseCondition({ all: [{ variable: 'game_state.93', from: false, equals: 1 }] }),
+    /Transition values must have the same type/);
+  const roomBank = new RunEvaluation({ condition: { all: [{ variable: 'room_vars.0', equals: 1 }] } });
+  assert.equal(roomBank.requiresRoomTelemetry, false);
 });
 
 test('private evaluator interrupts an active wait and prevents remaining inputs', { timeout: 30000 }, async t => {
@@ -72,12 +115,12 @@ test('missing engine telemetry fails explicitly without a visual fallback', { ti
   assert.match(result.error, /does not provide evaluation variables/);
 });
 
-test('launcher writes telemetry and a success receipt, exits zero, and keeps stdout MCP-only', { timeout: 30000 }, async t => {
-  const fixture = await startFixture({ evaluation: true });
+test('launcher accepts a variable-only provider and keeps receipts and telemetry off stdout', { timeout: 30000 }, async t => {
+  const fixture = await startFixture({ evaluation: 'game_variables_only' });
   const directory = await mkdtemp(path.join(tmpdir(), 'agentscumm-launcher-'));
   const resultFile = path.join(directory, 'result.json');
   const child = spawn(process.execPath, ['src/index.js', '--no-viewer', '--base-url', fixture.url,
-    '--data-dir', path.join(directory, 'browser'), '--stop-condition', JSON.stringify(condition),
+    '--data-dir', path.join(directory, 'browser'), '--stop-condition', JSON.stringify(variableCondition),
     '--evaluation-log', path.join(directory, 'evaluation.jsonl'), '--result-file', resultFile, '--telemetry-ms', '50'],
   { cwd: new URL('..', import.meta.url), stdio: ['pipe', 'pipe', 'pipe'] });
   const exit = once(child, 'exit');
@@ -104,11 +147,16 @@ test('launcher writes telemetry and a success receipt, exits zero, and keeps std
     { type: 'click', x: 50, y: 50 }, { type: 'wait', milliseconds: 10000 }, { type: 'click', x: 90, y: 90 }] } });
   assert.deepEqual(await exit, [0, null]);
   const result = JSON.parse(await readFile(resultFile, 'utf8'));
-  assert.equal(result.success, true); assert.equal(result.variables.room_id, 71);
+  assert.equal(result.success, true);
+  assert.deepEqual(result.variables, { engine_id: 'queen' });
+  assert.equal(result.game_variables.game_state[93], 1);
+  assert.equal(result.game_variable_match.previous, 0);
   assert.ok((await readFile(result.screenshot)).length > 1000);
   const telemetry = (await readFile(path.join(directory, 'evaluation.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
-  assert.ok(telemetry.some(event => event.event === 'variables' && event.variables.room_id === 70));
+  assert.ok(telemetry.some(event => event.event === 'variables' && event.game_variables.game_state[93] === 0));
+  assert.ok(telemetry.some(event => event.event === 'game_variables_baseline' && event.banks.game_state[93] === 0));
+  assert.deepEqual(telemetry.filter(event => event.event === 'game_variables_change').map(event => event.value), [1, 0]);
   assert.equal(telemetry.at(-1).event, 'success');
   assert.ok(messages.every(message => message.jsonrpc === '2.0'));
-  assert.doesNotMatch(JSON.stringify(messages), /room_id|room_ready|native_time_ms/);
+  assert.doesNotMatch(JSON.stringify(messages), /room_id|room_ready|native_time_ms|game_state|game_variables/);
 });

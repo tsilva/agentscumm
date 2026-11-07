@@ -584,10 +584,11 @@ export class GameRuntime {
     this.evaluationRead = (async () => {
       try {
         const payload = await bounded(this.shell.evaluate(readEvaluation), 2000, 'Evaluator could not read engine telemetry');
-        if (!payload.current && performance.now() - this.evaluationReadyAt > 5000) {
+        const hasTelemetry = payload.current || (!this.evaluation.requiresRoomTelemetry && payload.gameVariableEvents != null);
+        if (!hasTelemetry && performance.now() - this.evaluationReadyAt > 5000) {
           throw new Error('This game runtime does not provide evaluation variables; rebuild with the supported engine hook');
         }
-        if (payload.current) this.evaluation.accept(payload);
+        if (hasTelemetry) this.evaluation.accept(payload);
       } catch (error) { this.evaluation.fail(error); }
     })();
     try { await this.evaluationRead; } finally { this.evaluationRead = null; }

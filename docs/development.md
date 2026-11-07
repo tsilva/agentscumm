@@ -19,6 +19,9 @@ visits retained between polls, missing telemetry, active-wait interruption,
 blocked post-goal inputs, cached partial results, private telemetry, result
 receipts, zero exit status on success, and Play Game client shutdown. Run the
 focused checks with `node --test test/evaluation.test.js test/play-game-client.test.js`.
+Game variable coverage also verifies ordered writes between polls, save
+baselines, invalid providers and slots, and the matching snapshot in a
+launcher receipt.
 When diagnosing timing failures under competing browser/build load, run the
 suite with `node --test --test-concurrency=1 test/*.test.js`, then
 `pnpm test:export`. The synthetic checks do not establish the room mapping or

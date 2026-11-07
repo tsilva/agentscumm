@@ -33,11 +33,10 @@ trial needs fresh output paths. With no explicit paths, files are placed inside
 that instance's data directory. The Play Game local MCP client forwards these
 same four options and ends when its server stops.
 
-Conditions are a nonempty `all` list of typed equality predicates. Supported
-variables are `engine_id` (string), `room_id` (integer), `room_name` (string), and
-`room_ready` (boolean). There is no JavaScript expression execution. Advertised
-snapshots include `schema_version` and `native_time_ms`; only the named variables
-can appear in conditions. Any evaluation option enables telemetry; omit
+Conditions are a nonempty `all` list of typed predicates. Room conditions
+accept `engine_id` (string), `room_id` (integer), `room_name` (string), and
+`room_ready` (boolean). Room snapshots include `schema_version` and
+`native_time_ms`. Any evaluation option enables telemetry. Omit
 `--stop-condition` to record variables without a success trigger.
 
 This requires ScummWEB's opt-in Queen evaluation hook. Existing deployments
@@ -73,6 +72,40 @@ trial's outputs.
 Keep evaluator files and browser/runtime inspection outside the player's tool
 access when requiring evaluator-only information. Separate files and omitted MCP
 fields do not isolate a player with unrestricted filesystem/browser access.
+
+### Game variables
+
+A runtime that publishes game variables exposes them as indexed banks.
+Queen provides `game_state` with 211 signed integer slots. For example, slot
+93 tracks the hotel escape sequence. To stop on a write from `0` to `1`,
+pass this condition to the launcher:
+
+```sh
+--stop-condition '{"all":[{"variable":"engine_id","equals":"queen"},{"variable":"game_state.93","from":0,"equals":1}]}'
+```
+
+Omit `from` to match the value in a baseline or after any write. A baseline
+after loading a save can satisfy equality. A predicate with `from` requires
+an actual write. Variable predicates can be combined with other indexed
+predicates and `engine_id`. Each condition supports one `from` predicate.
+Room conditions are evaluated separately because room readiness describes
+the last presented frame. Invalid slots, incompatible value types, and
+runtimes without the game variable feed fail explicitly.
+
+The evaluator log contains periodic `variables` rows with a `game_variables`
+snapshot, plus every `game_variables_baseline` and `game_variables_change`
+record in native order. A baseline replaces all banks. Each change includes
+its bank, zero-based index, previous and new values, and native time. Query
+the latest sampled value or watch the write history from outside the game:
+
+```sh
+jq -r 'select(.event == "variables" and .game_variables) | .game_variables.game_state[93]' variables.jsonl | tail -1
+tail -F variables.jsonl | jq --unbuffered -c 'select(.event == "game_variables_change" and .bank == "game_state" and .index == 93)'
+```
+
+Variable success receipts include the matching native record as
+`game_variable_match` and the bank snapshot at that point as `game_variables`.
+Use the pinned runtime and game data when interpreting slot numbers.
 
 ## Parallel instances
 
