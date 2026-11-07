@@ -26,8 +26,10 @@ require = EXPORT.require
 LEGACY_BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Total actions | Action sequences |"
 LEGACY_BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |"
 PREVIOUS_BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Input tokens | Output tokens | Cached input tokens | Total API price (USD) | Total actions | Action sequences |"
-BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Input tokens | Output tokens | Cached input tokens (% of input) | Total API cost (USD) | Total actions | Action sequences |"
-BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+ANNOTATED_BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Input tokens | Output tokens | Cached input tokens (% of input) | Total API cost (USD) | Total actions | Action sequences |"
+PREVIOUS_BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+BENCHMARK_HEADER = "| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Tokens | Input tokens | Output tokens | Cached input tokens (% of input) | Date (UTC) |"
+BENCHMARK_SEPARATOR = "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
 BENCHMARK_NOTES = ("✅ marks a completed archive. Unfinished runs show the verified milestone count and latest milestone when available. "
                    "Otherwise they show a declared estimate or Unknown. "
                    "Time is elapsed conversation time (HH:MM:SS), including pauses and resumes, or elapsed so far for unfinished runs. "
@@ -38,6 +40,11 @@ PREVIOUS_BENCHMARK_PRICING_NOTES = (
     "API price is API-equivalent model-token cost in USD, excluding separately billed tools and taxes. "
     "Standard assumed marks missing recorded processing tiers; Unknown means no verified archived price.\n"
 )
+PREVIOUS_RATE_NOTE = (
+    "The rates date is when those prices were verified for the archive and can differ from the run date. "
+    "Standard assumed marks missing processing tiers. "
+)
+ARCHIVED_RATE_NOTE = "The archive records the rate verification date and any pricing tier assumptions. "
 BENCHMARK_PRICING_NOTES = (
     "Cache percentage is cached input divided by total input, rounded to two decimal places. "
     "It is N/A when total input is zero. Output includes reasoning tokens.\n\n"
@@ -45,8 +52,7 @@ BENCHMARK_PRICING_NOTES = (
     "Each request uses the archived official rates for its exact model, processing tier and context length. "
     "Multiply uncached input, cached input and output by their respective USD rates per million tokens, "
     "divide by one million, and sum across requests. Apply separate cache-write rates when applicable. "
-    "The rates date is when those prices were verified for the archive and can differ from the run date. "
-    "Standard assumed marks missing processing tiers. Unknown means no verified archived cost. "
+    + ARCHIVED_RATE_NOTE + "Unknown means no verified archived cost. "
     "The estimate excludes separately billed tools and taxes. [Pricing details](docs/run-archives.md#token-pricing)\n"
 )
 
@@ -133,10 +139,6 @@ def benchmark_usage(stats):
     api_price = "Unknown"
     if cost.get("status") == "priced":
         api_price = "$" + format(EXPORT.USAGE.rate(cost["total_api_price_usd"]), ",.2f")
-        if "Missing processing tiers priced as standard" in cost.get("assumptions", []):
-            api_price += " (Standard assumed)"
-        if cost.get("pricing_retrieved_on"):
-            api_price += f" · rates {cost['pricing_retrieved_on']}"
     tokens = stats["tokens"]
     return [*(f"{tokens[key]:,}" if tokens.get(key) is not None else "Unknown"
               for key in ("input_tokens", "output_tokens")),
@@ -166,29 +168,32 @@ def benchmark_entry(stats, title=None):
     title = title or stats["game_id"].replace("-", " ").title()
     completed = EXPORT.USAGE.timestamp(stats["recorded_through"]).astimezone(timezone.utc).date()
     seconds = round(stats["wall_clock_seconds"])
+    input_tokens, output_tokens, cached_input, api_cost = benchmark_usage(stats)
     cells = [
-        benchmark_status(stats), title, completed.isoformat(),
+        benchmark_status(stats), title, api_cost,
         ", ".join(stats["models"]) + " / " + (", ".join(stats["reasoning_levels"]) or "Unknown"),
         "Yes" if stats["walkthrough_urls"] else "Unspecified",
         f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}",
-        f"{stats['tokens']['total_tokens']:,}",
-        *benchmark_usage(stats),
         *benchmark_actions(stats),
+        f"{stats['tokens']['total_tokens']:,}",
+        input_tokens, output_tokens, cached_input, completed.isoformat(),
     ]
     # Keep the deduplication marker inside the row so Markdown renders one table.
-    return "| " + " | ".join(public_text(value) for value in cells) + f" <!-- agentscumm:benchmark:{digest} --> |\n"
+    cells = [public_text(value) for value in cells]
+    cells[7] += f" <!-- agentscumm:benchmark:{digest} -->"
+    return "| " + " | ".join(cells) + " |\n"
 
 
 def upgrade_benchmark_table(text, stats=None):
     """Upgrade the previous table without inventing missing archive measurements."""
     lines = text.splitlines(keepends=True)
-    headers = [i for i, line in enumerate(lines)
-               if line.strip() in (LEGACY_BENCHMARK_HEADER, PREVIOUS_BENCHMARK_HEADER, BENCHMARK_HEADER)]
+    headers = [i for i, line in enumerate(lines) if line.strip() in (
+        LEGACY_BENCHMARK_HEADER, PREVIOUS_BENCHMARK_HEADER, ANNOTATED_BENCHMARK_HEADER, BENCHMARK_HEADER)]
     require(len(headers) <= 1, "Multiple benchmark comparison tables; resolve before registration")
     if headers and lines[headers[0]].strip() != BENCHMARK_HEADER:
         position = headers[0]
         legacy = lines[position].strip() == LEGACY_BENCHMARK_HEADER
-        separator = LEGACY_BENCHMARK_SEPARATOR if legacy else BENCHMARK_SEPARATOR
+        separator = LEGACY_BENCHMARK_SEPARATOR if legacy else PREVIOUS_BENCHMARK_SEPARATOR
         require(position + 1 < len(lines) and lines[position + 1].strip() == separator,
                 "Invalid previous benchmark comparison table separator")
         lines[position:position + 2] = [BENCHMARK_HEADER + "\n", BENCHMARK_SEPARATOR + "\n"]
@@ -202,6 +207,8 @@ def upgrade_benchmark_table(text, stats=None):
                 total = cells[7].replace(",", "")
                 cells[9] = benchmark_cached_input(int(cells[9].replace(",", "")),
                                                   int(total) if total.isdecimal() else None)
+            cost = re.sub(r" · rates [0-9]{4}-[0-9]{2}-[0-9]{2}$", "", cells[10]).removesuffix(" (Standard assumed)")
+            cells = [*cells[:2], cost, *cells[3:6], *cells[11:13], *cells[6:10], cells[2]]
             lines[position] = "| " + " | ".join(cells) + " |\n"
             position += 1
     if stats is not None:
@@ -214,10 +221,12 @@ def upgrade_benchmark_table(text, stats=None):
             require(len(cells) == 13, "Invalid benchmark row")
             if stats.get("verified_progress") and cells[0] != "✅":
                 cells[0] = public_text(benchmark_status(stats))
-            cells[7:] = [*map(public_text, benchmark_usage(stats)), *benchmark_actions(stats)]
-            cells[-1] += f" {marker}"
+            cells[9], cells[10], cells[11], cells[2] = map(public_text, benchmark_usage(stats))
+            cells[6:8] = benchmark_actions(stats)
+            cells[7] += f" {marker}"
             lines[position] = "| " + " | ".join(cells) + " |\n"
     text = "".join(lines)
+    text = text.replace(PREVIOUS_RATE_NOTE, ARCHIVED_RATE_NOTE, 1)
     text = text.replace(PREVIOUS_BENCHMARK_PRICING_NOTES.strip(), BENCHMARK_PRICING_NOTES.strip(), 1)
     if BENCHMARK_PRICING_NOTES.strip() not in text:
         text = text.rstrip() + "\n\n" + BENCHMARK_PRICING_NOTES

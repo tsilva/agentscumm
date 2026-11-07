@@ -339,12 +339,13 @@ class FinalizationTests(unittest.TestCase):
         self.assertEqual(parsed[0][0], "✅")
         self.assertEqual(parsed[0][3], "test-model / high")
         self.assertEqual(parsed[1][3], "comparison-model / high")
-        price = f"$0.00 (Standard assumed) · rates {stats['api_cost']['pricing_retrieved_on']}"
-        self.assertEqual(parsed[0][7:11], ["100", "20", "70 (70.00%)", price])
-        self.assertEqual(parsed[1][7:11], ["100", "20", "70 (70.00%)", price])
-        self.assertEqual(parsed[0][11:], ["2", "1"])
-        self.assertEqual(parsed[1][11:], ["3", "1"])
-        self.assertEqual(parsed[1][6], f"{stats['tokens']['total_tokens']:,}")
+        self.assertEqual(parsed[0][2], "$0.00")
+        self.assertEqual(parsed[1][2], "$0.00")
+        self.assertEqual(parsed[0][9:12], ["100", "20", "70 (70.00%)"])
+        self.assertEqual(parsed[1][9:12], ["100", "20", "70 (70.00%)"])
+        self.assertEqual(parsed[0][6:8], ["2", "1"])
+        self.assertEqual(parsed[1][6:8], ["3", "1"])
+        self.assertEqual(parsed[1][8], f"{stats['tokens']['total_tokens']:,}")
         self.assertEqual(parsed[1][4], "Unspecified")
         self.assertIn("Editorial note retained.", text)
         self.assertFalse(FINAL.register_benchmark(first["archive"], repo=self.repo))
@@ -359,7 +360,7 @@ class FinalizationTests(unittest.TestCase):
         row = FINAL.benchmark_entry(stats, "Synthetic Adventure")
         parsed = [cell.strip() for cell in re.sub(r"<!--.*?-->", "", row).split("|")[1:-1]]
         self.assertEqual(parsed[0], "✅")
-        self.assertEqual(parsed[2], "2026-11-05")
+        self.assertEqual(parsed[12], "2026-11-05")
         self.assertEqual(parsed[5], "00:00:07")
         self.assertEqual(len(row.splitlines()), 1)
         self.assertNotIn("Europe/", row)
@@ -368,9 +369,8 @@ class FinalizationTests(unittest.TestCase):
         self.source(fixture(complete=True))
         archive, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo,
             status="completed", completion_note="Ending observed")
-        cells = [cell.strip() for cell in FINAL.benchmark_entry(stats).strip().split("|")[1:-1]]
-        del cells[7:11]
-        row = "| " + " | ".join(cells) + " |\n"
+        marker = f"<!-- agentscumm:benchmark:{stats['trajectory']['sha256']} -->"
+        row = f"| ✅ | Synthetic Game | 2026-11-05 | test-model / high | Unspecified | 00:00:07 | 120 | 2 | 1 {marker} |\n"
         path = self.repo / "BENCHMARKS.md"
         path.write_text("# Benchmarks\n\n" + FINAL.LEGACY_BENCHMARK_HEADER + "\n"
                         + FINAL.LEGACY_BENCHMARK_SEPARATOR + "\n" + row + "\nEditorial note preserved.\n")
@@ -378,14 +378,14 @@ class FinalizationTests(unittest.TestCase):
         upgraded = path.read_text()
         self.assertEqual(upgraded.count("<!-- agentscumm:benchmark:"), 1)
         self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
-        usage = ("| 100 | 20 | 70 (70.00%) | $0.00 (Standard assumed) "
-                 f"· rates {stats['api_cost']['pricing_retrieved_on']} |")
+        usage = "| 100 | 20 | 70 (70.00%) |"
         self.assertIn(usage, upgraded)
+        self.assertIn("| Synthetic Game | $0.00 |", upgraded)
         self.assertIn("Editorial note preserved.", upgraded)
         self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
         self.assertEqual(path.read_text(), upgraded)
         # A different legacy row may already have been migrated with unknowns.
-        unknown = upgraded.replace(usage, "| Unknown | Unknown | Unknown | Unknown |")
+        unknown = upgraded.replace(usage, "| Unknown | Unknown | Unknown |").replace("| $0.00 |", "| Unknown |")
         path.write_text(unknown)
         self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
         self.assertEqual(path.read_text(), upgraded)
@@ -393,7 +393,7 @@ class FinalizationTests(unittest.TestCase):
     def test_previous_table_backfills_cache_percentages_without_repricing(self):
         original = "\n".join([
             FINAL.PREVIOUS_BENCHMARK_HEADER,
-            FINAL.BENCHMARK_SEPARATOR,
+            FINAL.PREVIOUS_BENCHMARK_SEPARATOR,
             "| ✅ | Example | 2000-01-01 | test-model | Yes | 00:01:00 | 1,320 | 1,300 | 20 | 800 | $0.25 | 4 | 2 |",
             "| Unknown | Example | 2000-01-02 | test-model | Yes | 00:01:00 | 0 | 0 | 0 | 0 | Unknown | 0 | 0 |",
             "| Unknown | Example | 2000-01-03 | test-model | Yes | 00:01:00 | 20 | Unknown | 20 | 0 | Unknown | 0 | 0 |",
@@ -401,10 +401,29 @@ class FinalizationTests(unittest.TestCase):
         ])
         upgraded = FINAL.upgrade_benchmark_table(original)
         self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
-        self.assertIn("| 800 (61.54%) | $0.25 |", upgraded)
-        self.assertIn("| 0 (N/A) | Unknown |", upgraded)
-        self.assertIn("| 0 (Unknown) | Unknown |", upgraded)
+        self.assertIn("| Example | $0.25 |", upgraded)
+        self.assertIn("| 800 (61.54%) | 2000-01-01 |", upgraded)
+        self.assertIn("| 0 (N/A) | 2000-01-02 |", upgraded)
+        self.assertIn("| 0 (Unknown) | 2000-01-03 |", upgraded)
         self.assertNotIn(FINAL.PREVIOUS_BENCHMARK_PRICING_NOTES, upgraded)
+        self.assertEqual(FINAL.upgrade_benchmark_table(upgraded), upgraded)
+
+    def test_annotated_table_moves_cost_forward_and_strips_display_labels(self):
+        marker = f"<!-- agentscumm:benchmark:{'a' * 64} -->"
+        original = "\n".join([
+            FINAL.ANNOTATED_BENCHMARK_HEADER,
+            FINAL.PREVIOUS_BENCHMARK_SEPARATOR,
+            "| ✅ | Example | 2000-01-01 | test-model | Yes | 00:01:00 | 1,320 | 1,300 | 20 | 800 (61.54%) | "
+            f"$0.25 (Standard assumed) · rates 2000-01-02 | 4 | 2 {marker} |",
+            "", "Editorial note retained.",
+        ])
+        upgraded = FINAL.upgrade_benchmark_table(original)
+        self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
+        self.assertIn(f"| ✅ | Example | $0.25 | test-model | Yes | 00:01:00 | 4 | 2 {marker} | "
+                      "1,320 | 1,300 | 20 | 800 (61.54%) | 2000-01-01 |", upgraded)
+        self.assertNotIn("Standard assumed", upgraded)
+        self.assertNotIn("2000-01-02", upgraded)
+        self.assertIn("Editorial note retained.", upgraded)
         self.assertEqual(FINAL.upgrade_benchmark_table(upgraded), upgraded)
 
     def test_benchmark_cost_rounds_to_cents_and_distinguishes_missing_price(self):
