@@ -9,10 +9,12 @@ const integer = z.number().int();
 const mask = integer.min(1).max(0x7fffffff);
 const equals = z.union([integer, z.boolean()]);
 const oneOf = z.array(integer).min(1).max(16);
+const bankName = z.string().regex(/^[a-z][a-z0-9_]{0,39}$/);
 const bankSlot = z.object({
-  bank: z.string().regex(/^[a-z][a-z0-9_]{0,39}$/),
+  bank: bankName,
   index: bankIndex,
 }).strict();
+const keyedSlot = z.object({ bank: bankName, key: z.string().min(1).max(80) }).strict();
 const flagSlot = bankSlot.extend({
   mask: mask.refine(value => (value & (value - 1)) === 0, 'Expected a single-bit mask'),
 });
@@ -43,8 +45,9 @@ const mapSchema = z.object({
   engine_id: z.string().min(1).max(80),
   edition: z.object({ game_id: slug, index_md5: z.string().regex(/^[a-f0-9]{32}$/) }).strict().optional(),
   scoring: z.literal('highest_stage').optional(),
+  telemetry: z.literal('snapshot').optional(),
   rooms: z.record(slug, roomId).optional(),
-  variables: z.record(slug, bankSlot).optional(),
+  variables: z.record(slug, z.union([bankSlot, keyedSlot])).optional(),
   flags: z.record(slug, flagSlot).optional(),
   objects: z.record(slug, bankIndex).optional(),
   milestones: z.array(z.object({
@@ -92,7 +95,11 @@ function resolveReferences(rule, map, milestone) {
   }
   if ('variable' in rule) {
     const { variable, ...condition } = rule;
-    return { ...lookup('variables', variable), ...condition };
+    const slot = lookup('variables', variable);
+    if ('key' in slot && map.telemetry !== 'snapshot') {
+      throw new Error(`Variable "${variable}" in progress map ${map.game} requires snapshot telemetry`);
+    }
+    return { ...slot, ...condition };
   }
   if ('flag' in rule) {
     const flag = lookup('flags', rule.flag);
@@ -118,13 +125,24 @@ class GameProgress {
     this.variablesAvailable = this.variableRules.length === 0;
   }
 
+  get usesSnapshots() {
+    return this.map.telemetry === 'snapshot';
+  }
+
+  acceptSnapshot(identity, snapshot) {
+    const { banks, room_id, room_ready, sample_time_ms: native_time_ms } = snapshot;
+    const rooms = room_id === null ? [] : [{ room_id, room_ready, native_time_ms }];
+    // Rebuild from the sampled save state, including after an in-game load.
+    this.accept(identity.engine_id, rooms, [{ event: 'game_variables_baseline', native_time_ms, banks }], identity);
+  }
+
   matches(rule, room) {
     if (rule.all) return rule.all.every(child => this.matches(child, room));
     if (rule.any) return rule.any.some(child => this.matches(child, room));
     if (rule.milestone) return this.reached.has(rule.milestone);
     if ('room_id' in rule) return room?.room_id === rule.room_id &&
       (rule.room_ready === undefined || room.room_ready === rule.room_ready);
-    const value = this.banks?.[rule.bank]?.[rule.index];
+    const value = this.banks?.[rule.bank]?.[rule.key ?? rule.index];
     if (rule.one_of) return rule.one_of.includes(value);
     if (rule.mask) return typeof value === 'number' && (value & rule.mask) === rule.equals;
     return value === rule.equals;
@@ -143,7 +161,7 @@ class GameProgress {
         this.room = undefined;
         this.banks = structuredClone(record.banks);
         this.variablesAvailable = this.variableRules.every(rule =>
-          typeof this.banks[rule.bank]?.[rule.index] === typeof (rule.equals ?? rule.one_of[0]));
+          typeof this.banks[rule.bank]?.[rule.key ?? rule.index] === typeof (rule.equals ?? rule.one_of[0]));
       } else if (record.event === 'game_variables_change') {
         if (this.banks) this.banks[record.bank][record.index] = record.value;
       } else {

@@ -151,6 +151,10 @@ The Fate of Atlantis map tracks seven milestones for the English DOS CD
 edition. The Team, Wits, and Fists routes share the same score. The final
 milestone requires the escape flag and arrival at the ending scene.
 
+The DreamWeb map tracks seven milestones using the engine's story flags and
+current location. The final milestone detects the winning branch of the
+subway confrontation.
+
 Progress includes the count, total, rounded percentage, and furthest milestone
 reached in map order. A restored save rebuilds the score from its current
 variables and room.

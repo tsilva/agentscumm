@@ -53,6 +53,9 @@ The loader rejects undeclared labels. Rules also accept direct bank predicates,
 require the native game ID and index MD5. For `highest_stage` maps, the
 furthest verified milestone counts the earlier stages even when the player
 took a route that bypassed them.
+Maps with `telemetry: snapshot` evaluate the latest native snapshot and can
+bind a variable with `{ bank, key }` for a named telemetry bank entry. Use
+markers that persist in saves to retain credit when a player leaves a room.
 Verify rules against the target edition and test restores,
 alternate paths, and the live ending before adding a completion milestone.
 Mapped games record milestone changes in their private session logs for

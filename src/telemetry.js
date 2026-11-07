@@ -24,11 +24,15 @@ export function readGameTelemetry() {
   return globalThis.scummwebTelemetry?.read();
 }
 
-export function telemetryReport({ identity, snapshot } = {},
-  { bank, offset = 0, limit = 64 } = {}) {
+export function parseGameTelemetry({ identity, snapshot } = {}) {
   const game_identity = identity == null ? null : identitySchema.parse(identity);
   const sample = snapshot == null ? null : snapshotSchema.parse(snapshot);
   if (sample && !game_identity) throw new Error('Missing telemetry engine identity');
+  return { identity: game_identity, snapshot: sample };
+}
+
+export function telemetryReport(payload, { bank, offset = 0, limit = 64 } = {}) {
+  const { identity: game_identity, snapshot: sample } = parseGameTelemetry(payload);
   const room = sample?.room_id != null || sample?.room_name ? {
     id: sample.room_id, sample_time_ms: sample.sample_time_ms,
     ...(sample.room_name !== undefined && { name: sample.room_name }),

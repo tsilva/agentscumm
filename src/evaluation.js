@@ -4,6 +4,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { z } from 'zod';
 import { loadGameProgress } from './progress.js';
+import { parseGameTelemetry } from './telemetry.js';
 
 const fields = { engine_id: z.string().min(1).max(80), room_id: z.number().int().min(0),
   room_name: z.string().max(200), room_ready: z.boolean() };
@@ -50,14 +51,15 @@ export function enableEvaluation() {
   globalThis.__scummwebEvaluationEnabled = true;
 }
 
-export function readEvaluation() {
+export function readEvaluation(usesSnapshots) {
   if (globalThis.__scummwebEvaluationOverflow) throw new Error('Evaluation transition queue overflow');
   if (globalThis.__scummwebEvaluationGameVariableOverflow) throw new Error('Game variable telemetry queue overflow');
   return { current: globalThis.__scummwebEvaluationState ?? null,
     identity: globalThis.__scummwebEvaluationGame ?? null,
     events: (globalThis.__scummwebEvaluationEvents ?? []).splice(0),
     gameVariableEngine: globalThis.__scummwebEvaluationGameVariableEngine ?? null,
-    gameVariableEvents: globalThis.__scummwebEvaluationGameVariableEvents?.splice(0) ?? null };
+    gameVariableEvents: globalThis.__scummwebEvaluationGameVariableEvents?.splice(0) ?? null,
+    ...(usesSnapshots && { progressTelemetry: globalThis.scummwebTelemetry?.read() }) };
 }
 
 export class RunEvaluation extends EventEmitter {
@@ -145,7 +147,9 @@ export class RunEvaluation extends EventEmitter {
       if (variables.native_time_ms < nativeTime) throw new Error('Evaluation native clock moved backwards');
       nativeTime = variables.native_time_ms;
     }
-    const identity = payload.identity;
+    const progressTelemetry = this.progressTracker?.usesSnapshots
+      ? parseGameTelemetry(payload.progressTelemetry) : undefined;
+    const identity = payload.identity ?? progressTelemetry?.identity;
     const engineId = payload.gameVariableEngine ?? current?.engine_id ?? identity?.engine_id;
     if (current && engineId !== current.engine_id) throw new Error('Evaluation engine identities disagree');
     const game = this.acceptGameVariables(payload.gameVariableEvents, engineId);
@@ -160,15 +164,22 @@ export class RunEvaluation extends EventEmitter {
     this.current = variables ?? latest ?? samples.at(-1);
     let progressChanged = false;
     if (this.progressTracker) {
-      const events = game?.events ?? [];
       const matchedWrite = game?.match?.game_variable_match;
       const stopTime = matchedWrite?.native_time_ms ?? variables?.native_time_ms ?? Infinity;
-      const matchedRoom = matchedWrite ? -1 : samples.indexOf(variables);
-      const progressRooms = matchedRoom < 0 ? samples.filter(sample => sample.native_time_ms <= stopTime) :
-        samples.slice(0, matchedRoom + 1);
-      const progressEvents = matchedWrite ? events.slice(0, events.indexOf(matchedWrite) + 1) :
-        events.filter(event => event.native_time_ms <= stopTime);
-      this.progressTracker.accept(engineId, progressRooms, progressEvents, identity);
+      if (progressTelemetry) {
+        const { identity: snapshotIdentity, snapshot } = progressTelemetry;
+        if (snapshot && snapshot.sample_time_ms <= stopTime) {
+          this.progressTracker.acceptSnapshot(snapshotIdentity, snapshot);
+        }
+      } else {
+        const events = game?.events ?? [];
+        const matchedRoom = matchedWrite ? -1 : samples.indexOf(variables);
+        const progressRooms = matchedRoom < 0 ? samples.filter(sample => sample.native_time_ms <= stopTime) :
+          samples.slice(0, matchedRoom + 1);
+        const progressEvents = matchedWrite ? events.slice(0, events.indexOf(matchedWrite) + 1) :
+          events.filter(event => event.native_time_ms <= stopTime);
+        this.progressTracker.accept(engineId, progressRooms, progressEvents, identity);
+      }
       const progress = this.progressTracker.report();
       progressChanged = JSON.stringify(progress) !== JSON.stringify(this.progress);
       if (progressChanged) this.progress = progress;

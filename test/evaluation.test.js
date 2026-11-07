@@ -182,6 +182,36 @@ test('Fate of Atlantis tracks shared milestones and requires the surviving endin
   assert.equal(evaluation.progress.completed, 0);
 });
 
+test('DreamWeb scores keyed snapshots and rebuilds progress after a restore', async () => {
+  const evaluation = new RunEvaluation();
+  await evaluation.beginSession('dreamweb');
+  const identity = { engine_id: 'dreamweb', game_id: 'dreamweb' };
+  const start = { rockstarDead: 0, generalDead: 0, sartainDead: 0, aideDead: 0,
+    canMoveAltar: 0, manDead: 0, madmanFlag: 0 };
+  let sampleTime = 0;
+  const accept = (room_id, vars) => evaluation.accept({ current: null, events: [],
+    progressTelemetry: { identity, snapshot: { schema_version: 1, room_id,
+      sample_time_ms: ++sampleTime, banks: { game_vars: vars } } } });
+
+  accept(0, { ...start, manDead: null });
+  assert.equal(evaluation.progress.reason, 'missing_game_variables');
+  accept(0, start);
+  assert.equal(evaluation.progress.completed, 0);
+  accept(24, { ...start, rockstarDead: 1, generalDead: 2, sartainDead: 2 });
+  assert.equal(evaluation.progress.completed, 3, 'Aftermath states still count as completed targets');
+  const altar = { ...start, rockstarDead: 1, generalDead: 2, sartainDead: 2, aideDead: 1, canMoveAltar: 1 };
+  accept(9, altar);
+  assert.equal(evaluation.progress.completed, 5);
+  accept(14, { ...altar, manDead: 2 });
+  assert.equal(evaluation.progress.completed, 6);
+  accept(14, { ...altar, madmanFlag: 1 });
+  assert.equal(evaluation.progress.percent, 100);
+  accept(9, altar);
+  assert.equal(evaluation.progress.completed, 5, 'Loading before the subway drops credit for later milestones');
+  accept(0, start);
+  assert.equal(evaluation.progress.completed, 0);
+});
+
 test('game variable transitions ignore restored values and retain the matching snapshot', () => {
   const evaluation = new RunEvaluation({ condition: variableCondition });
   const records = [];

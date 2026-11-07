@@ -191,7 +191,7 @@ export class GameRuntime {
       this.logPath = path.join(this.dataDir, 'runs', `${this.sessionId}.jsonl`);
       const catalogGame = games.find(entry => entry.slug === game);
       const url = new URL(`/${game}/play`, this.baseUrl);
-      if (this.telemetryEnabled) url.searchParams.set('telemetry', '1');
+      if (this.telemetryEnabled || evaluation.progressTracker?.usesSnapshots) url.searchParams.set('telemetry', '1');
       if (mode === 'skip_intro' && catalogGame?.skipIntro) url.hash = 'seed=0';
       if (mode === 'continue') url.hash = 'continue';
       this.gameUrl = url.toString();
@@ -615,10 +615,12 @@ export class GameRuntime {
     const isCurrent = () => this.shell === shell && this.sessionId === sessionId && this.phase === 'ready';
     this.evaluationRead = (async () => {
       try {
-        const payload = await bounded(shell.evaluate(readEvaluation), 2000, 'Evaluator could not read engine telemetry');
+        const payload = await bounded(shell.evaluate(readEvaluation, evaluation.progressTracker?.usesSnapshots),
+          2000, 'Evaluator could not read engine telemetry');
         if (!isCurrent()) return;
         const hasTelemetry = evaluation.requiresRoomTelemetry ? payload.current
-          : payload.gameVariableEvents != null || (!evaluation.gamePredicates.length && (payload.current || payload.identity));
+          : payload.gameVariableEvents != null || (!evaluation.gamePredicates.length &&
+            (payload.current || payload.identity || payload.progressTelemetry?.snapshot));
         if (!hasTelemetry && performance.now() - this.evaluationReadyAt > 5000) {
           throw new Error('This game runtime does not provide evaluation variables; rebuild with the supported engine hook');
         }
