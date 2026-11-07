@@ -131,6 +131,57 @@ test('Last Crusade scores the credits by outcome and rebuilds progress on restor
   assert.equal(evaluation.progress.completed, 2, 'A bank-only branch can match between room samples');
 });
 
+test('Fate of Atlantis tracks shared milestones and requires the surviving ending', async () => {
+  const evaluation = new RunEvaluation();
+  await evaluation.beginSession('indiana-jones-and-the-fate-of-atlantis');
+  const identity = { engine_id: 'scumm', game_id: 'atlantis', index_md5: '182344899c2e2998fca0bebcd82aa81a' };
+  const bits = Array(81).fill(0);
+  const objects = Array(583).fill(0);
+  const baseline = native_time_ms => ({ event: 'game_variables_baseline', native_time_ms,
+    banks: { scumm_bit_bytes: bits, object_state: objects } });
+  function accept(room, time, gameVariableEvents = [], game = identity) {
+    evaluation.accept({ identity: game, current: { ...state(room, time, false), engine_id: 'scumm' },
+      events: [], gameVariableEngine: 'scumm', gameVariableEvents });
+  }
+
+  accept(48, 1, [baseline(1)], { ...identity, index_md5: '0'.repeat(32) });
+  assert.equal(evaluation.progress.reason, 'edition_mismatch');
+  accept(68, 2, [baseline(2)]);
+  assert.equal(evaluation.progress.completed, 0);
+  bits[9] = 0x81;
+  accept(10, 3, [baseline(3)]);
+  assert.deepEqual(evaluation.progress.reached, ['new-york-theater']);
+  bits[26] = 0x14;
+  accept(1, 4, [baseline(4)]);
+  assert.equal(evaluation.progress.latest_milestone, "Read Plato's Lost Dialogue");
+  accept(51, 5);
+  assert.equal(evaluation.progress.latest_milestone, 'Entered the Crete Labyrinth');
+  accept(48, 6);
+  assert.equal(evaluation.progress.completed, 4);
+  objects[582] = 1;
+  accept(94, 7, [baseline(7)]);
+  assert.equal(evaluation.progress.completed, 4, 'Restoring past the entrance retains credit for reaching Atlantis');
+  accept(55, 8);
+  assert.equal(evaluation.progress.completed, 5);
+  accept(23, 9);
+  assert.equal(evaluation.progress.completed, 6);
+  accept(24, 10);
+  assert.equal(evaluation.progress.completed, 6, 'Death retains prior progress');
+  accept(96, 11);
+  assert.equal(evaluation.progress.completed, 6, 'The ending room alone cannot grant completion');
+  accept(25, 12, [{ event: 'game_variables_change', native_time_ms: 12,
+    bank: 'scumm_bit_bytes', index: 4, previous: 0, value: 0x10 }]);
+  assert.equal(evaluation.progress.completed, 6, 'Starting the escape cannot grant completion');
+  accept(96, 13);
+  assert.equal(evaluation.progress.percent, 100);
+  assert.equal(evaluation.progressTracker.nextMilestone, null);
+
+  bits.fill(0);
+  objects.fill(0);
+  accept(68, 14, [baseline(14)]);
+  assert.equal(evaluation.progress.completed, 0);
+});
+
 test('game variable transitions ignore restored values and retain the matching snapshot', () => {
   const evaluation = new RunEvaluation({ condition: variableCondition });
   const records = [];

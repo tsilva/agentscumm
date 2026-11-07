@@ -6,36 +6,50 @@ edition:
   # English Amiga/EGA index.
   index_md5: 9c0fee288ad564a7d25ec3e841810d79
 scoring: highest_stage
+rooms:
+  castle-brunwald: 12
+  ending-credits: 94
+variables:
+  ending-outcome: { bank: scumm_vars, index: 99 }
+flags:
+  henry-out-of-cell: { bank: scumm_vars, index: 92, mask: 0x8000 }
+  grail-temple-reached: { bank: scumm_vars, index: 93, mask: 0x4000 }
+  true-grail-chosen: { bank: scumm_vars, index: 94, mask: 0x0001 }
+  left-barnett: { bank: scumm_vars, index: 94, mask: 0x0020 }
+  grail-knight-reached: { bank: scumm_vars, index: 95, mask: 0x0004 }
+  henry-healing-started: { bank: scumm_vars, index: 95, mask: 0x0008 }
+objects:
+  castle-entrance: 156
 milestones:
   - id: departed-barnett
     label: Left Barnett for the Grail search
-    when: { bank: scumm_vars, index: 94, mask: 0x0020, equals: 0x0020 }
+    when: { flag: left-barnett }
   - id: castle-brunwald
     label: Reached Castle Brunwald
     when:
       any:
-        - { room_id: 12 }
-        - { bank: object_state, index: 156, equals: 1 }
+        - { room: castle-brunwald }
+        - { object: castle-entrance, equals: 1 }
   - id: henry-out-of-cell
     label: Got Henry out of his cell
-    when: { bank: scumm_vars, index: 92, mask: 0x8000, equals: 0x8000 }
+    when: { flag: henry-out-of-cell }
   - id: grail-temple
     label: Reached the Grail Temple
-    when: { bank: scumm_vars, index: 93, mask: 0x4000, equals: 0x4000 }
+    when: { flag: grail-temple-reached }
   - id: grail-knight
     label: Passed the trials and reached the Grail Knight
-    when: { bank: scumm_vars, index: 95, mask: 0x0004, equals: 0x0004 }
+    when: { flag: grail-knight-reached }
   - id: true-grail
     label: Chose the true Grail and returned to Henry
     when:
       all:
-        - { bank: scumm_vars, index: 94, mask: 0x0001, equals: 0x0001 }
-        - { bank: scumm_vars, index: 95, mask: 0x0008, equals: 0x0008 }
+        - { flag: true-grail-chosen }
+        - { flag: henry-healing-started }
   - id: surviving-ending
     label: Reached the ending with Indy alive
     when:
       all:
-        - { room_id: 94 }
+        - { room: ending-credits }
         # Outcome 2 also enters the credits after Indy dies at the seal.
-        - { bank: scumm_vars, index: 99, one_of: [1, 3, 4] }
+        - { variable: ending-outcome, one_of: [1, 3, 4] }
         - { milestone: true-grail }

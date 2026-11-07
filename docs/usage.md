@@ -147,8 +147,13 @@ observed during a cutaway, so the rule accepts `room_ready: false`.
 The Last Crusade map tracks seven milestones for the English Amiga edition.
 The final milestone requires the surviving ending outcome at the credits.
 
+The Fate of Atlantis map tracks seven milestones for the English DOS CD
+edition. The Team, Wits, and Fists routes share the same score. The final
+milestone requires the escape flag and arrival at the ending scene.
+
 Progress includes the count, total, rounded percentage, and furthest milestone
-reached in map order. A restored save rebuilds the score from its variables.
+reached in map order. A restored save rebuilds the score from its current
+variables and room.
 Each milestone counts once on that save timeline. When the runtime lacks the
 required variables, progress is reported as unavailable. This percentage counts
 story milestones and does not estimate time remaining.

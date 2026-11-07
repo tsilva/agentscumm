@@ -1,0 +1,81 @@
+schema_version: 1
+game: indiana-jones-and-the-fate-of-atlantis
+engine_id: scumm
+edition:
+  game_id: atlantis
+  # English DOS CD index (ATLANTIS.000).
+  index_md5: 182344899c2e2998fca0bebcd82aa81a
+scoring: highest_stage
+rooms:
+  god-machine-entrance: 22
+  colossus-chamber: 23
+  god-machine-overlook: 30
+  atlantis-airlock: 48
+  labyrinth: 50
+  labyrinth-catacombs: 51
+  labyrinth-waterfall: 52
+  labyrinth-subway: 53
+  labyrinth-boulder-room: 54
+  inner-ring-lava-maze: 55
+  labyrinth-elevator: 56
+  labyrinth-three-statues: 57
+  labyrinth-map-room: 59
+  labyrinth-gold-box: 60
+  labyrinth-minotaur-room: 61
+  ending-scene: 96
+flags:
+  # Global script 172 sets bit 36 on the surviving branch.
+  escaped-atlantis: { bank: scumm_bit_bytes, index: 4, mask: 0x10 }
+  # The theater entry script records the first arrival in bit 79.
+  visited-new-york-theater: { bank: scumm_bit_bytes, index: 9, mask: 0x80 }
+  # The office's local script 209 marks the reading scene with bit 212.
+  lost-dialogue-read: { bank: scumm_bit_bytes, index: 26, mask: 0x10 }
+  # Bit 647 records the first approach from the lava maze.
+  approached-colossus: { bank: scumm_bit_bytes, index: 80, mask: 0x80 }
+objects:
+  # The airlock's local script 216 opens this exit.
+  airlock-exit: 582
+milestones:
+  - id: new-york-theater
+    label: Reached Sophia's theater in New York
+    when: { flag: visited-new-york-theater }
+  - id: lost-dialogue
+    label: Read Plato's Lost Dialogue
+    when: { flag: lost-dialogue-read }
+  - id: crete-labyrinth
+    label: Entered the Crete Labyrinth
+    when:
+      any:
+        - { room: labyrinth }
+        - { room: labyrinth-catacombs }
+        - { room: labyrinth-waterfall }
+        - { room: labyrinth-subway }
+        - { room: labyrinth-boulder-room }
+        - { room: labyrinth-elevator }
+        - { room: labyrinth-three-statues }
+        - { room: labyrinth-map-room }
+        - { room: labyrinth-gold-box }
+        - { room: labyrinth-minotaur-room }
+  - id: atlantis
+    label: Reached Atlantis
+    when:
+      any:
+        - { room: atlantis-airlock }
+        - { object: airlock-exit, equals: 1 }
+  - id: inner-ring
+    label: Reached the inner ring's lava maze
+    when: { room: inner-ring-lava-maze }
+  - id: colossus
+    label: Reached the Colossus chamber
+    when:
+      any:
+        - { room: god-machine-entrance }
+        - { room: colossus-chamber }
+        - { room: god-machine-overlook }
+        - { flag: approached-colossus }
+  - id: escaped-atlantis
+    label: Escaped Atlantis and reached the ending
+    when:
+      all:
+        - { room: ending-scene }
+        - { flag: escaped-atlantis }

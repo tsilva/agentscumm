@@ -33,12 +33,26 @@ provider before treating a new endpoint as a benchmark.
 
 The evaluator loads `src/progress-maps/<game-slug>.yaml` for the launched slug.
 Define `schema_version: 1`, `game`, `engine_id`,
-and ordered `milestones` with unique IDs and display labels. Each `when` rule
-matches a typed `{bank, index, equals}` or a `{room_id}` with optional
-`room_ready`. Rules can use masks, `one_of`, `all`, `any`, and references to
-earlier milestones. Edition-specific maps require the native game ID and
-index MD5. For `highest_stage` maps, the furthest verified milestone counts
-the earlier stages even when the player took a route that bypassed them.
+and ordered `milestones` with unique IDs and display labels. In the optional
+`rooms` mapping, assign a native room ID to each room label, such as
+`ending-credits: 110`. Use `when: { room: ending-credits }` to reference it.
+Room rules also accept a numeric `room_id` and an optional `room_ready`
+condition. Three other optional mappings name native game state.
+
+- `variables` maps labels to `{ bank, index }`. Use
+  `{ variable: ending-outcome, one_of: [1, 3, 4] }` or compare with `equals`.
+- `flags` maps labels to `{ bank, index, mask }`, where the mask selects a
+  single bit. Use `{ flag: escaped-atlantis }` to match a set bit, or add
+  `equals: false` to match a clear bit.
+- `objects` maps labels to numeric object IDs. Use
+  `{ object: airlock-exit, equals: 1 }` to compare the object's state, or use
+  `one_of` to accept several states.
+
+The loader rejects undeclared labels. Rules also accept direct bank predicates,
+`all`, `any`, and references to earlier milestones. Edition-specific maps
+require the native game ID and index MD5. For `highest_stage` maps, the
+furthest verified milestone counts the earlier stages even when the player
+took a route that bypassed them.
 Verify rules against the target edition and test restores,
 alternate paths, and the live ending before adding a completion milestone.
 Mapped games record milestone changes in their private session logs for
