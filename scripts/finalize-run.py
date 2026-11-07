@@ -28,8 +28,10 @@ LEGACY_BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---:
 PREVIOUS_BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Input tokens | Output tokens | Cached input tokens | Total API price (USD) | Total actions | Action sequences |"
 ANNOTATED_BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Input tokens | Output tokens | Cached input tokens (% of input) | Total API cost (USD) | Total actions | Action sequences |"
 PREVIOUS_BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
-BENCHMARK_HEADER = "| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Tokens | Input tokens | Output tokens | Cached input tokens (% of input) | Date (UTC) |"
-BENCHMARK_SEPARATOR = "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+SEPARATE_CACHE_BENCHMARK_HEADER = "| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Tokens | Input tokens | Output tokens | Cached input tokens (% of input) | Date (UTC) |"
+SEPARATE_CACHE_BENCHMARK_SEPARATOR = "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+BENCHMARK_HEADER = "| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Tokens | Input tokens | Output tokens | Date (UTC) |"
+BENCHMARK_SEPARATOR = "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
 BENCHMARK_NOTES = ("✅ marks a completed archive. Unfinished runs show the verified milestone count and latest milestone when available. "
                    "Otherwise they show a declared estimate or Unknown. "
                    "Time is elapsed conversation time (HH:MM:SS), including pauses and resumes, or elapsed so far for unfinished runs. "
@@ -125,13 +127,14 @@ def public_text(value):
     return html.escape(" ".join(str(value).split()), quote=False).replace("|", "\\|").replace("`", "&#96;")
 
 
-def benchmark_cached_input(cached, total):
-    if cached is None:
+def benchmark_input(total, cached):
+    if total is None:
         return "Unknown"
-    percentage = "Unknown"
-    if total is not None:
-        percentage = f"{cached / total:.2%}" if total else "N/A"
-    return f"{cached:,} ({percentage})"
+    if total == 0:
+        return "0 (N/A)"
+    if cached is None:
+        return f"{total:,} (Unknown)"
+    return f"{total:,} ({cached / total:.2%} cached)"
 
 
 def benchmark_usage(stats):
@@ -140,9 +143,9 @@ def benchmark_usage(stats):
     if cost.get("status") == "priced":
         api_price = "$" + format(EXPORT.USAGE.rate(cost["total_api_price_usd"]), ",.2f")
     tokens = stats["tokens"]
-    return [*(f"{tokens[key]:,}" if tokens.get(key) is not None else "Unknown"
-              for key in ("input_tokens", "output_tokens")),
-            benchmark_cached_input(tokens.get("cached_input_tokens"), tokens.get("input_tokens")), api_price]
+    output = tokens.get("output_tokens")
+    return [benchmark_input(tokens.get("input_tokens"), tokens.get("cached_input_tokens")),
+            f"{output:,}" if output is not None else "Unknown", api_price]
 
 
 def benchmark_status(stats):
@@ -168,7 +171,7 @@ def benchmark_entry(stats, title=None):
     title = title or stats["game_id"].replace("-", " ").title()
     completed = EXPORT.USAGE.timestamp(stats["recorded_through"]).astimezone(timezone.utc).date()
     seconds = round(stats["wall_clock_seconds"])
-    input_tokens, output_tokens, cached_input, api_cost = benchmark_usage(stats)
+    input_tokens, output_tokens, api_cost = benchmark_usage(stats)
     cells = [
         benchmark_status(stats), title, api_cost,
         ", ".join(stats["models"]) + " / " + (", ".join(stats["reasoning_levels"]) or "Unknown"),
@@ -176,7 +179,7 @@ def benchmark_entry(stats, title=None):
         f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}",
         *benchmark_actions(stats),
         f"{stats['tokens']['total_tokens']:,}",
-        input_tokens, output_tokens, cached_input, completed.isoformat(),
+        input_tokens, output_tokens, completed.isoformat(),
     ]
     # Keep the deduplication marker inside the row so Markdown renders one table.
     cells = [public_text(value) for value in cells]
@@ -188,12 +191,17 @@ def upgrade_benchmark_table(text, stats=None):
     """Upgrade the previous table without inventing missing archive measurements."""
     lines = text.splitlines(keepends=True)
     headers = [i for i, line in enumerate(lines) if line.strip() in (
-        LEGACY_BENCHMARK_HEADER, PREVIOUS_BENCHMARK_HEADER, ANNOTATED_BENCHMARK_HEADER, BENCHMARK_HEADER)]
+        LEGACY_BENCHMARK_HEADER, PREVIOUS_BENCHMARK_HEADER, ANNOTATED_BENCHMARK_HEADER,
+        SEPARATE_CACHE_BENCHMARK_HEADER, BENCHMARK_HEADER)]
     require(len(headers) <= 1, "Multiple benchmark comparison tables; resolve before registration")
     if headers and lines[headers[0]].strip() != BENCHMARK_HEADER:
         position = headers[0]
-        legacy = lines[position].strip() == LEGACY_BENCHMARK_HEADER
-        separator = LEGACY_BENCHMARK_SEPARATOR if legacy else PREVIOUS_BENCHMARK_SEPARATOR
+        header = lines[position].strip()
+        legacy = header == LEGACY_BENCHMARK_HEADER
+        separator = {
+            LEGACY_BENCHMARK_HEADER: LEGACY_BENCHMARK_SEPARATOR,
+            SEPARATE_CACHE_BENCHMARK_HEADER: SEPARATE_CACHE_BENCHMARK_SEPARATOR,
+        }.get(header, PREVIOUS_BENCHMARK_SEPARATOR)
         require(position + 1 < len(lines) and lines[position + 1].strip() == separator,
                 "Invalid previous benchmark comparison table separator")
         lines[position:position + 2] = [BENCHMARK_HEADER + "\n", BENCHMARK_SEPARATOR + "\n"]
@@ -203,12 +211,14 @@ def upgrade_benchmark_table(text, stats=None):
             require(len(cells) == (9 if legacy else 13), "Invalid previous benchmark row")
             if legacy:
                 cells[7:7] = ["Unknown"] * 4
-            elif re.fullmatch(r"[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+", cells[9]):
-                total = cells[7].replace(",", "")
-                cells[9] = benchmark_cached_input(int(cells[9].replace(",", "")),
-                                                  int(total) if total.isdecimal() else None)
-            cost = re.sub(r" · rates [0-9]{4}-[0-9]{2}-[0-9]{2}$", "", cells[10]).removesuffix(" (Standard assumed)")
-            cells = [*cells[:2], cost, *cells[3:6], *cells[11:13], *cells[6:10], cells[2]]
+            if header != SEPARATE_CACHE_BENCHMARK_HEADER:
+                cost = re.sub(r" · rates [0-9]{4}-[0-9]{2}-[0-9]{2}$", "", cells[10]).removesuffix(" (Standard assumed)")
+                cells = [*cells[:2], cost, *cells[3:6], *cells[11:13], *cells[6:10], cells[2]]
+            total = cells[9].replace(",", "")
+            cached = cells[11].partition(" ")[0].replace(",", "")
+            if total.isdecimal():
+                cells[9] = benchmark_input(int(total), int(cached) if cached.isdecimal() else None)
+            del cells[11]
             lines[position] = "| " + " | ".join(cells) + " |\n"
             position += 1
     if stats is not None:
@@ -218,10 +228,10 @@ def upgrade_benchmark_table(text, stats=None):
         if matching:
             position = matching[0]
             cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", lines[position].strip())[1:-1]]
-            require(len(cells) == 13, "Invalid benchmark row")
+            require(len(cells) == 12, "Invalid benchmark row")
             if stats.get("verified_progress") and cells[0] != "✅":
                 cells[0] = public_text(benchmark_status(stats))
-            cells[9], cells[10], cells[11], cells[2] = map(public_text, benchmark_usage(stats))
+            cells[9], cells[10], cells[2] = map(public_text, benchmark_usage(stats))
             cells[6:8] = benchmark_actions(stats)
             cells[7] += f" {marker}"
             lines[position] = "| " + " | ".join(cells) + " |\n"

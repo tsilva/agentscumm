@@ -1,9 +1,9 @@
 # Benchmarks
 
-| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Tokens | Input tokens | Output tokens | Cached input tokens (% of input) | Date (UTC) |
-| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| ✅ | Flight of the Amazon Queen | $46.77 | gpt-6.1-sol / high | Yes | 16:51:19 | 8,530 | 950 <!-- agentscumm:benchmark:ea00d2f2c82e3fea5333a08d1bc4545f366f058d045dde0bc20aaf785bec2e81 --> | 234,994,829 | 234,782,913 | 211,916 | 232,678,016 (99.10%) | 2026-11-06 |
-| ✅ | Indiana Jones and the Last Crusade | $30.71 | gpt-6.1-sol / high | Yes | 07:28:13 | 2,769 | 547 <!-- agentscumm:benchmark:0004e66106b7c5f0aacb7614317897c1c8b529b183cdca196c41e5196f7d56b3 --> | 191,022,061 | 190,934,079 | 87,982 | 189,691,776 (99.35%) | 2026-11-07 |
+| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Tokens | Input tokens | Output tokens | Date (UTC) |
+| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| ✅ | Flight of the Amazon Queen | $46.77 | gpt-6.1-sol / high | Yes | 16:51:19 | 8,530 | 950 <!-- agentscumm:benchmark:ea00d2f2c82e3fea5333a08d1bc4545f366f058d045dde0bc20aaf785bec2e81 --> | 234,994,829 | 234,782,913 (99.10% cached) | 211,916 | 2026-11-06 |
+| ✅ | Indiana Jones and the Last Crusade | $30.71 | gpt-6.1-sol / high | Yes | 07:28:13 | 2,769 | 547 <!-- agentscumm:benchmark:0004e66106b7c5f0aacb7614317897c1c8b529b183cdca196c41e5196f7d56b3 --> | 191,022,061 | 190,934,079 (99.35% cached) | 87,982 | 2026-11-07 |
 
 ✅ marks a completed archive. Unfinished runs show the verified milestone count and latest milestone when available. Otherwise they show a declared estimate or Unknown. Time is elapsed conversation time (HH:MM:SS), including pauses and resumes, or elapsed so far for unfinished runs. Tokens include cached/repeated input plus output; actions count submitted inputs, including waits. Missing walkthrough declarations mean unspecified assistance, not unaided play.
 
