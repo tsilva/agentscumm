@@ -317,6 +317,9 @@ Supported actions:
   (0–1000, default 150). The mouse stays down at the source before moving and at the
   target before release for `hold_ms` each. Both holds count toward the 20-second budget.
 - `wait`: `milliseconds` (0–10000).
+- `pause` and `resume`: explicitly hold or release native game updates. Repeating either is safe.
+- `wait_ticks`: `ticks` (1–120). Advance that many native updates and hold at the resulting frame.
+- `save` and `load`: integer `id` (1 through `status.agentControls.maxSaveSlot`), a native save slot in the current run.
 - `screenshot`: no additional fields; captures at this exact position in the sequence without issuing input.
 
 Sequences have at most 32 steps, including up to eight explicit screenshots, and a 20-second combined explicit hold/wait budget. The whole sequence is validated before input starts. Sequences run serially and stop at the first error. `after_ms` allows 0–3000 ms before the final screenshot; this is a bounded delay, not a promise that a game animation has ended.
@@ -326,6 +329,18 @@ For a hover survey, submit `move → wait → screenshot → move → wait → s
 **Retry the same request ID with identical arguments after an uncertain tool response.** The last 100 request results are cached per game session, and retries return the original result without sending input again. Older used IDs are rejected rather than re-executed. A session accepts up to 10,000 distinct action requests. A new launch creates a new session ID and clears request history; stale session IDs cannot issue input.
 
 Results distinguish captured screenshots, delivered inputs and uncertain delivery and include partial completion if a sequence fails. Delivered means the browser accepted the input operation, not that the game completed the intended action. Inspect the returned screenshot or history before deciding what to do next. MCP cancellation interrupts explicit waits and key holds and stops the remaining sequence; already delivered input is not undone. The same request ID continues to identify that attempt.
+
+### Native game time and saves
+
+Native actions currently work in **Beneath a Steel Sky** (the Sky engine) on a compatible ScummWEB build. For any game, `status.nativeControls` reports `available` and the supported `actions`. When unavailable it returns an empty list and a reason, such as `engine_not_advertised`, `runtime_bridge_missing`, or `unscoped_run`. The engine can advertise controls after the first game frame, so status checks again until the controls become available.
+
+If a batch requests an unavailable native action, `act` rejects the whole batch before sending input. The MCP error includes `code: "NATIVE_CONTROL_UNSUPPORTED"`, the requested `control`, and the `reason`. Ordinary input and screenshots remain available. Each successful native step reports its confirmed `tick` and `paused` state. A tick is one update of the game's logic, independent of screenshot FPS or wall-clock time. Native requests have a 10-second per-operation deadline and a shared 20-second batch window.
+
+Use `pause → screenshot` to inspect a stable scene, then `wait_ticks → screenshot` to step forward. In `resume → wait_ticks → pause`, the server hands the tick budget to the engine before releasing it, so the batch advances exactly the requested ticks. An immediately following click in `resume → click` is queued before releasing a paused engine. `wait` and `after_ms` still measure wall-clock time.
+
+`save` and `load` use ScummVM's normal save format and obey the engine's restrictions on the current scene. Saving to an existing ID replaces that slot in the run. Loading a missing ID fails and stops the batch. A paused load stays paused and renders the restored scene. Observe again before choosing actions based on the restored state.
+
+Fresh game launches get a new `runId` by default. Native saves are scoped to that run, game and owned browser profile. To reopen them after closing a session or restarting the server, use the same browser data directory and call `session(operation="start", mode="continue", run_id=...)` with the returned run ID. This loads the latest native save, after which `load` can select a different slot. The local Play Game client retains its run ID across `--resume`. An unscoped `continue` with no configured run ID remains available for existing browser saves.
 
 ### Visual history and spectator
 
@@ -347,7 +362,7 @@ Recovery is explicit: inspect the error, then use `session` with `operation: "st
 
 The owned browser profile, game saves/cache, and JSONL action logs live in an isolated directory under ignored repository-local `.agentscumm/instances/` by default. Use a named instance or explicit data directory to recover saves across server restarts; see [parallel instances](#parallel-instances). Cached macOS app bundles live in repository-local `.agentscumm/macos/`, keyed by their source, app icon, and architecture, and can be reused by multiple spectator processes. The browser uses no personal browsing profile. Do not remove an in-use profile.
 
-An unexpected game-document replacement or browser/page closure blocks further input. Use `session(operation="close")` and relaunch explicitly; `mode: "continue"` requests ScummWEB's supported save recovery. There is no automatic restart, arbitrary rewind, or MCP save/load API in this version. Closing the MCP client terminates its owned game and viewer processes while leaving persistent browser data intact. Browser/process failure can lose progress since the last game save. Host sleep also stops useful capture.
+An unexpected game-document replacement or browser/page closure blocks further input. Use `session(operation="close")` and relaunch explicitly; `mode: "continue"` requests ScummWEB's supported save recovery. Closing the MCP client terminates its owned game and viewer processes while leaving persistent browser data intact. Browser/process failure can lose progress since the last game save. Host sleep also stops useful capture.
 
 CLI options:
 

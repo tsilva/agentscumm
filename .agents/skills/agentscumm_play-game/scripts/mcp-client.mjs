@@ -10,6 +10,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 const root = await realpath(path.resolve(import.meta.dirname, '../../../..'));
 const { values } = parseArgs({ options: {
   'run-dir': { type: 'string' }, resume: { type: 'boolean', default: false },
+  'legacy-sky-slot': { type: 'string' },
   'no-viewer': { type: 'boolean', default: false }, 'base-url': { type: 'string' },
   'stop-condition': { type: 'string' }, 'evaluation-log': { type: 'string' },
   'result-file': { type: 'string' }, 'telemetry-ms': { type: 'string' }, telemetry: { type: 'boolean' },
@@ -19,6 +20,11 @@ const runDir = path.resolve(root, values['run-dir']);
 const relative = path.relative(root, runDir).split(path.sep).join('/');
 if (!/^\.internal\/[a-z0-9]+(?:-[a-z0-9]+)*\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(relative)) {
   throw new Error('Run directory must be exactly .internal/<game-id>/<run-id>/ in the AgentSCUMM repository');
+}
+const legacySkySlot = values['legacy-sky-slot'];
+if (legacySkySlot !== undefined && (!values.resume || !relative.startsWith('.internal/beneath-a-steel-sky/') ||
+  !/^[1-9][0-9]{0,2}$/.test(legacySkySlot))) {
+  throw new Error('--legacy-sky-slot requires --resume, a Beneath a Steel Sky run and a manual slot from 1 to 999');
 }
 const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 if (await realpath(git(['rev-parse', '--show-toplevel'])) !== root) throw new Error('Skill is not inside its owning Git repository');
@@ -30,15 +36,33 @@ for (const part of ['.internal', relative.split('/').slice(0, 2).join('/'), rela
   if (existing?.isSymbolicLink() || (existing && !existing.isDirectory())) throw new Error(`Unsafe run directory: ${part}`);
   if (!existing) await mkdir(directory, { mode: 0o700 });
 }
-for (const name of ['events.jsonl', 'browser']) {
+for (const name of ['events.jsonl', 'run-scope.json', 'browser']) {
   const existing = await lstat(path.join(runDir, name)).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-  if (existing?.isSymbolicLink() || (name === 'events.jsonl' && existing && !existing.isFile())) throw new Error(`Unsafe run artifact: ${name}`);
+  if (existing?.isSymbolicLink() || (name !== 'browser' && existing && !existing.isFile())) throw new Error(`Unsafe run artifact: ${name}`);
 }
 const browserDir = path.join(runDir, 'browser');
 if (!values.resume && await lstat(browserDir).catch(() => null)) throw new Error('Run already has browser data; use --resume or select a new run ID');
 
+const scopeFile = path.join(runDir, 'run-scope.json');
+let runId;
+try {
+  runId = JSON.parse(await readFile(scopeFile, 'utf8')).runId;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(runId)) {
+    throw new Error('Invalid run-scope.json');
+  }
+} catch (error) {
+  if (error.code !== 'ENOENT') throw error;
+  // Older profiles used the unscoped native save directory. Preserve their
+  // recovery route when the caller explicitly resumes them.
+  if (!values.resume || legacySkySlot !== undefined) {
+    runId = randomUUID();
+    await writeFile(scopeFile, JSON.stringify({ runId }) + '\n', { flag: 'wx', mode: 0o600 });
+  }
+}
 const client = new Client({ name: 'agentscumm_play-game', version: '1.0' });
 const serverArgs = [path.join(root, 'src/index.js'), '--data-dir', browserDir];
+if (runId) serverArgs.push('--run-id', runId);
+if (legacySkySlot !== undefined) serverArgs.push('--legacy-sky-slot', legacySkySlot);
 if (values['no-viewer']) serverArgs.push('--no-viewer');
 if (values['base-url']) serverArgs.push('--base-url', values['base-url']);
 if (values.telemetry) serverArgs.push('--telemetry');

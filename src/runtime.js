@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { FrameHistory } from './history.js';
-import { SerialQueue, validateSequence } from './actions.js';
+import { nativeActions, SerialQueue, validateSequence } from './actions.js';
 import { SpectatorViewer } from './viewer.js';
 import { installHealthObserver, readShellState, bounded } from './health.js';
 import { installDisplayObserver, displayBounds, captureBounds } from './display.js';
@@ -29,6 +29,13 @@ export const games = [
 ].map(([slug, target, skipIntro]) => ({ slug, target, skipIntro }));
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url));
+
+function unsupportedNativeControl(control, reason) {
+  const error = new Error(`Native control "${control}" is unavailable in this run (${reason})`);
+  error.toolDetails = { code: 'NATIVE_CONTROL_UNSUPPORTED', control, reason };
+  error.nativeFailure = true;
+  return error;
+}
 
 export function repositoryRevision(root = projectRoot) {
   const git = (...args) => execFileSync('git', ['-C', root, ...args], {
@@ -85,11 +92,18 @@ export class GameRuntime {
     this.shutdownSignal = new AbortController();
     this.evaluation = options.evaluation;
     this.telemetryEnabled = Boolean(options.telemetry);
+    this.defaultRunId = options.runId?.toLowerCase();
+    this.legacySkySlot = options.legacySkySlot;
+    if (this.legacySkySlot !== undefined && !this.defaultRunId) throw new Error('Legacy Sky save import requires --run-id');
   }
 
   status() {
     const frame = this.phase === 'ready' ? this.history.latest() : null;
-    return { phase: this.phase, sessionId: this.sessionId, game: this.game, url: this.gameUrl,
+    const available = this.phase === 'ready' && Boolean(this.agentControls);
+    const nativeControls = available ? { available, actions: [...nativeActions] } : {
+      available, actions: [], reason: this.phase === 'ready' ? this.nativeControlReason ?? 'awaiting_probe' : 'game_not_ready',
+    };
+    return { phase: this.phase, sessionId: this.sessionId, runId: this.runId, game: this.game, url: this.gameUrl,
       sourceRevision: this.sourceRevision,
       instanceId: this.instanceId, instanceLabel: this.instanceLabel, serverPid: process.pid, dataDir: this.dataDir,
       dimensions: frame ? { width: frame.width, height: frame.height } : this.dimensions,
@@ -106,7 +120,9 @@ export class GameRuntime {
       viewerUrl: this.viewer.url, viewerOpen: this.viewer.isOpen, viewerError: this.viewerError,
       libraryImport: this.libraryImport && { state: this.libraryImport.state, job_id: this.libraryImport.job_id,
         file_count: this.libraryImport.file_count, summary: this.libraryImport.summary, error: this.libraryImport.error },
-      recentActions: this.actions.slice(-8), capabilities: ['click', 'move', 'key', 'drag', 'wait', 'screenshot', 'sequences', 'frame-history', 'spectator'] };
+      nativeControls, ...(available && { agentControls: this.agentControls }),
+      recentActions: this.actions.slice(-8), capabilities: ['click', 'move', 'key', 'drag', 'wait', 'screenshot', 'sequences', 'frame-history', 'spectator',
+        ...nativeControls.actions] };
   }
 
   get spectatorProgress() {
@@ -157,13 +173,21 @@ export class GameRuntime {
     });
   }
 
-  async start({ game = 'flight-of-the-amazon-queen', mode = 'skip_intro', restart = false } = {}) {
+  async start({ game = 'flight-of-the-amazon-queen', mode = 'skip_intro', restart = false, run_id: requestedRunId } = {}) {
     return this.queue.run(async () => {
+      const runId = requestedRunId?.toLowerCase();
+      if (this.legacySkySlot !== undefined && (game !== 'beneath-a-steel-sky' ||
+        mode !== 'continue' || (runId && runId !== this.defaultRunId))) {
+        throw new Error('Legacy Sky save import requires Continue for Beneath a Steel Sky in the configured run');
+      }
       if (this.evaluation?.result) throw new Error('Evaluation has ended; start a new launcher process for another trial');
       if (this.closing) throw new Error('Runtime is shutting down');
       if (this.libraryImport?.state === 'importing') throw new Error('Wait for the library import to finish');
       if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(game)) throw new Error('Game must be a ScummWEB catalog slug');
-      if (this.game === game && ['loading', 'ready'].includes(this.phase) && !restart) return this.status();
+      if (this.game === game && ['loading', 'ready'].includes(this.phase) && !restart) {
+        if (runId && runId !== this.runId) throw new Error('A different run is active; close it or request a restart');
+        return this.status();
+      }
       if (this.phase === 'loading') throw new Error('A game is loading; wait for it or close the session first');
       if (this.page) await this.stopPage();
       this.importedGame = (await readLibrary(this.dataDir)).games.find(item => item.slug === game);
@@ -172,6 +196,10 @@ export class GameRuntime {
       this.sessionEvaluation = this.evaluation || evaluation.progressTracker ? evaluation : undefined;
       this.launchMode = mode;
       this.sessionId = randomUUID();
+      this.runId = runId ?? this.defaultRunId ?? (mode === 'continue' ? undefined : randomUUID());
+      this.saveScope = this.runId && createHash('sha256').update(JSON.stringify([this.runId, game])).digest('hex');
+      this.agentControls = undefined;
+      this.nativeControlReason = undefined;
       this.game = game;
       this.phase = 'loading';
       this.bootPhase = 'starting-browser';
@@ -191,12 +219,14 @@ export class GameRuntime {
       this.logPath = path.join(this.dataDir, 'runs', `${this.sessionId}.jsonl`);
       const catalogGame = games.find(entry => entry.slug === game);
       const url = new URL(`/${game}/play`, this.baseUrl);
+      if (this.saveScope) url.searchParams.set('agentSaveScope', this.saveScope);
+      if (this.legacySkySlot !== undefined) url.searchParams.set('agentLegacySkySlot', this.legacySkySlot);
       if (this.telemetryEnabled || evaluation.progressTracker?.usesSnapshots) url.searchParams.set('telemetry', '1');
       if (mode === 'skip_intro' && catalogGame?.skipIntro) url.hash = 'seed=0';
       if (mode === 'continue') url.hash = 'continue';
       this.gameUrl = url.toString();
       this.expectedTarget = this.importedGame ? undefined : catalogGame?.target;
-      await this.log('launch', { game, mode, url: this.gameUrl, dimensions: this.dimensions,
+      await this.log('launch', { game, mode, runId: this.runId, url: this.gameUrl, dimensions: this.dimensions,
         instanceId: this.instanceId, dataDir: this.dataDir,
         sourceRevision: this.sourceRevision });
       const sessionId = this.sessionId;
@@ -335,6 +365,7 @@ export class GameRuntime {
               this.phase = 'ready';
               await this.checkHealth();
               if (this.phase !== 'ready') throw new Error(this.message);
+              await this.probeNativeControls();
               remaining();
               await this.capture('launch-ready');
               this.scheduleCapture(sessionId);
@@ -429,8 +460,35 @@ export class GameRuntime {
   }
 
   async inspectStatus() {
-    if (this.phase === 'ready') await this.checkHealth();
+    if (this.phase === 'ready') {
+      await this.checkHealth();
+      if (!this.currentActionId) await this.probeNativeControls();
+    }
     return this.status();
+  }
+
+  async probeNativeControls() {
+    if (this.phase !== 'ready' || this.agentControls) return;
+    if (!this.saveScope) {
+      this.nativeControlReason = 'unscoped_run';
+      return;
+    }
+    const { shell, sessionId, saveScope } = this;
+    let controls, reason;
+    try {
+      controls = await bounded(shell.evaluate(() => globalThis.scummwebAgentControls?.status()),
+        1000, 'Native control capability probe timed out');
+      if (!controls) reason = 'runtime_bridge_missing';
+      else if (controls.version !== 1 || controls.saveScope !== saveScope) reason = 'runtime_bridge_incompatible';
+      // The shell exists for every scoped game. An engine advertises support
+      // only after its native update loop has reached the control boundary.
+      else if (!Number.isInteger(controls.maxSaveSlot) || controls.maxSaveSlot < 1) reason = 'engine_not_advertised';
+    } catch {
+      reason = 'bridge_probe_failed';
+    }
+    if (this.shell !== shell || this.sessionId !== sessionId || this.phase !== 'ready' || this.agentControls) return;
+    this.nativeControlReason = reason;
+    if (!reason) this.agentControls = { maxSaveSlot: controls.maxSaveSlot, paused: controls.paused, lastTick: controls.tick };
   }
 
   async checkHealth() {
@@ -493,6 +551,17 @@ export class GameRuntime {
         if (JSON.stringify(frame.captureBounds) !== JSON.stringify(box)) throw new Error('Game display geometry changed; observe again before issuing input');
       }
       const actions = validateSequence(rawActions, box.width, box.height);
+      const requestedControl = actions.find(action => nativeActions.has(action.type));
+      if (requestedControl) {
+        await this.probeNativeControls();
+        if (!this.agentControls) throw unsupportedNativeControl(requestedControl.type, this.nativeControlReason ?? 'game_not_ready');
+        await this.assertReady(sessionId);
+      }
+      for (const action of actions) {
+        if ((action.type === 'save' || action.type === 'load') && action.id > this.agentControls.maxSaveSlot) {
+          throw new Error(`Save ID exceeds this game's maximum slot (${this.agentControls.maxSaveSlot})`);
+        }
+      }
       const actionId = randomUUID();
       const record = { actionId, requestId, state: 'running', completed: 0, total: actions.length,
         startedAt: new Date().toISOString(), steps: [] };
@@ -505,6 +574,8 @@ export class GameRuntime {
       this.requests.set(requestId, { fingerprint, result });
       this.usedRequestIds.add(requestId);
       while (this.requests.size > 100) this.requests.delete(this.requests.keys().next().value);
+      const nativeDeadline = performance.now() + 20000;
+      let deferredResume;
       try {
         await this.log('action-start', { ...record, inputs: actions });
         await this.capture('before-action');
@@ -514,6 +585,14 @@ export class GameRuntime {
           this.currentStep = index;
           const step = { index, type: action.type, state: 'issuing' };
           record.steps.push(step);
+          const next = actions[index + 1];
+          if (action.type === 'resume' && (next?.type === 'wait_ticks' ||
+            (this.agentControls.paused && next?.type === 'click'))) {
+            // Keep the native gate closed until the tick budget or input is queued.
+            deferredResume = step;
+            step.state = 'deferred';
+            continue;
+          }
           const bounds = await this.canvas.boundingBox();
           if (!bounds) throw new Error('Game canvas is not visible');
           if (action.type === 'screenshot') {
@@ -521,13 +600,25 @@ export class GameRuntime {
             result.screenshots.push(frame);
             step.frameId = frame.id;
             step.state = 'captured';
+          } else if (nativeActions.has(action.type)) {
+            step.control = await this.executeNative(action, nativeDeadline, inputSignal);
+            step.state = 'delivered';
           } else {
             if ('x' in action && JSON.stringify((await this.gameGeometry()).captureBounds) !== JSON.stringify(box)) {
               throw new Error('Game display geometry changed during the sequence; observe again before issuing input');
             }
             await this.canvas.focus();
             await this.execute(action, box, inputSignal);
+            if (deferredResume) {
+              deferredResume.control = await this.executeNative({ type: 'resume' }, nativeDeadline, inputSignal);
+            }
             step.state = 'delivered';
+          }
+          if (deferredResume) {
+            deferredResume.state = 'delivered';
+            await this.log('action-step', { actionId, ...deferredResume });
+            record.completed++;
+            deferredResume = undefined;
           }
           record.completed++;
           await this.log('action-step', { actionId, ...step });
@@ -542,9 +633,15 @@ export class GameRuntime {
         record.state = 'completed';
       } catch (error) {
         record.state = this.evaluation?.result?.success ? 'stopped' : 'failed'; record.error = error.message;
+        if (error.toolDetails) Object.assign(record, error.toolDetails);
         const step = record.steps.at(-1);
-        if (step?.state === 'issuing') step.state = record.state === 'stopped' && step.type === 'wait'
-          ? 'interrupted' : step.type === 'screenshot' ? 'capture-failed' : 'delivery-uncertain';
+        if (deferredResume) deferredResume.state = 'interrupted';
+        if (step?.state === 'issuing') {
+          if (record.state === 'stopped' && ['wait', 'wait_ticks'].includes(step.type)) step.state = 'interrupted';
+          else if (step.type === 'screenshot') step.state = 'capture-failed';
+          else if (error.nativeFailure && nativeActions.has(step.type)) step.state = 'native-failed';
+          else step.state = 'delivery-uncertain';
+        }
         try { result.frame = await this.capture(record.state === 'stopped' ? 'stopped-action' : 'failed-action'); } catch { /* Status remains available after renderer loss. */ }
       } finally {
         record.finishedAt = new Date().toISOString();
@@ -553,6 +650,32 @@ export class GameRuntime {
       }
       return result;
     });
+  }
+
+  async executeNative(action, deadline, signal) {
+    signal.throwIfAborted();
+    const timeoutMs = Math.min(10000, Math.floor(deadline - performance.now()));
+    if (timeoutMs < 1) throw new Error('Native action batch timed out');
+    const result = await bounded(this.shell.evaluate(({ action, saveScope, timeoutMs }) => {
+      const controls = globalThis.scummwebAgentControls;
+      const status = controls?.status();
+      if (status?.version !== 1 || status.saveScope !== saveScope || !status.maxSaveSlot) {
+        return { unsupported: true };
+      }
+      return controls.run(action.type, action.id ?? action.ticks, timeoutMs);
+    }, { action, saveScope: this.saveScope, timeoutMs }), timeoutMs + 1000, 'ScummWEB native action did not respond');
+    if (result.unsupported) {
+      this.agentControls = undefined;
+      this.nativeControlReason = 'provider_changed';
+      throw unsupportedNativeControl(action.type, this.nativeControlReason);
+    }
+    if (result.error) {
+      const error = new Error(result.error);
+      error.nativeFailure = true;
+      throw error;
+    }
+    this.agentControls = { ...this.agentControls, paused: result.paused, lastTick: result.tick };
+    return result;
   }
 
   async execute(action, box, signal = this.shutdownSignal.signal) {
@@ -688,6 +811,7 @@ export class GameRuntime {
     return this.queue.run(async () => {
       this.phase = 'closed';
       this.sessionId = null;
+      this.agentControls = undefined;
       await this.stopPage();
       await this.bootTask;
       this.history.clear();

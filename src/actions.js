@@ -1,6 +1,8 @@
 import { z } from 'zod';
 
 const coordinate = z.number().finite().nonnegative();
+const saveId = z.number().int().min(1).max(999);
+export const nativeActions = new Set(['pause', 'resume', 'wait_ticks', 'save', 'load']);
 export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('click'), x: coordinate, y: coordinate,
     button: z.enum(['left', 'right', 'middle']).default('left'),
@@ -10,6 +12,11 @@ export const actionSchema = z.discriminatedUnion('type', [
     'One letter/digit, F1-F12, ArrowUp/Down/Left/Right, Enter, Escape, Space, Tab, Backspace, Delete, Home, End, PageUp/Down, Shift, Control or Alt. Named keys are case-sensitive; use Space, not SPACE. No shortcut combinations.'),
     hold_ms: z.number().int().min(0).max(5000).default(80) }).strict(),
   z.object({ type: z.literal('wait'), milliseconds: z.number().int().min(0).max(10000) }).strict(),
+  z.object({ type: z.literal('pause') }).strict(),
+  z.object({ type: z.literal('resume') }).strict(),
+  z.object({ type: z.literal('wait_ticks'), ticks: z.number().int().min(1).max(120) }).strict(),
+  z.object({ type: z.literal('save'), id: saveId }).strict(),
+  z.object({ type: z.literal('load'), id: saveId }).strict(),
   z.object({ type: z.literal('screenshot') }).strict(),
   z.object({ type: z.literal('drag'), from_x: coordinate, from_y: coordinate, x: coordinate, y: coordinate,
     button: z.enum(['left', 'right']).default('left'), steps: z.number().int().min(2).max(30).default(10),

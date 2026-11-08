@@ -47,8 +47,9 @@ test('local ZIP import, site errors, instance persistence and imported game laun
   const ready = await runtime.waitReady(20000);
   assert.equal(ready.phase, 'ready', ready.message);
   assert.equal(ready.sessionId, started.sessionId);
-  assert.equal(ready.url, `${fixture.url}/${entry.slug}/play`);
-  assert.ok(fixture.requests.slice(requestStart).includes(`/${entry.slug}/play`));
+  assert.equal(new URL(ready.url).pathname, `/${entry.slug}/play`);
+  assert.match(new URL(ready.url).searchParams.get('agentSaveScope'), /^[a-f0-9]{64}$/);
+  assert.ok(fixture.requests.slice(requestStart).some(url => url.startsWith(`/${entry.slug}/play?`)));
   assert.ok(!fixture.requests.slice(requestStart).includes('/'), 'Launch never detours through the homepage');
   assert.match(runtime.shell.url(), /launch=beginning/);
   await assert.rejects(runtime.library({ operation: 'import', paths: [zip] }), /Close the active game/);
@@ -64,7 +65,8 @@ test('local ZIP import, site errors, instance persistence and imported game laun
   await runtime.libraryTask;
   await runtime.start({ game: 'another-adventure' });
   assert.equal((await runtime.waitReady(20000)).phase, 'ready');
-  assert.equal(runtime.gameUrl, `${fixture.url}/another-adventure/play`);
+  assert.equal(new URL(runtime.gameUrl).pathname, '/another-adventure/play');
+  assert.notEqual(new URL(runtime.gameUrl).search, new URL(ready.url).search);
 });
 
 

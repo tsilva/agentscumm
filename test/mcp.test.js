@@ -77,6 +77,19 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
   const launch = JSON.parse((await call('session', { operation: 'start' })).content[0].text);
   const ready = JSON.parse((await call('status', { wait_ms: 15000 })).content[0].text);
   assert.equal(ready.phase, 'ready');
+  assert.deepEqual(ready.nativeControls, { available: false, actions: [], reason: 'runtime_bridge_missing' });
+  for (const native of [{ type: 'pause' }, { type: 'resume' }, { type: 'wait_ticks', ticks: 1 },
+    { type: 'save', id: 1 }, { type: 'load', id: 1 }]) {
+    assert.ok(!ready.capabilities.includes(native.type));
+    const rejected = await call('act', { session_id: launch.sessionId, request_id: `unsupported-${native.type}`,
+      actions: [{ type: 'click', x: 100, y: 100 }, native] });
+    assert.equal(rejected.isError, true);
+    const error = JSON.parse(rejected.content[0].text);
+    assert.equal(error.code, 'NATIVE_CONTROL_UNSUPPORTED');
+    assert.equal(error.control, native.type);
+    assert.equal(error.reason, 'runtime_bridge_missing');
+    assert.equal(error.status.actionSequences, 0, 'An unsupported step rejects the whole batch before input');
+  }
   const observed = await call('observe');
   const frame = JSON.parse(observed.content[0].text);
   assert.equal(observed.content[1].type, 'image');

@@ -72,6 +72,11 @@ test('play-game client records MCP images and calls inside a resumable run', { t
   const resumed = startClient([...args, '--resume']);
   assert.equal((await resumed.next()).ready, true);
   assert.equal((await resumed.call('status')).content[0].phase, 'idle');
+  const reopened = await resumed.call('session', { operation: 'start', game: 'synthetic-game', mode: 'continue' });
+  assert.equal(reopened.content[0].runId, launched.content[0].runId, 'Continue uses the same run scope after process restart');
+  assert.equal(new URL(reopened.content[0].url).searchParams.get('agentSaveScope'),
+    new URL(launched.content[0].url).searchParams.get('agentSaveScope'));
+  assert.equal((await resumed.call('status', { wait_ms: 10000 })).content[0].phase, 'ready');
   resumed.child.stdin.write('quit\n');
   assert.equal((await resumed.exited).code, 0);
 });

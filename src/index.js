@@ -15,6 +15,7 @@ const { values } = parseArgs({ options: {
   'base-url': { type: 'string' }, 'data-dir': { type: 'string' }, instance: { type: 'string' },
   width: { type: 'string' }, height: { type: 'string' }, fps: { type: 'string' },
   'buffer-seconds': { type: 'string' },
+  'run-id': { type: 'string' }, 'legacy-sky-slot': { type: 'string' },
   'stop-condition': { type: 'string' }, 'evaluation-log': { type: 'string' },
   'result-file': { type: 'string' }, 'telemetry-ms': { type: 'string' }, telemetry: { type: 'boolean' },
 } });
@@ -25,7 +26,8 @@ const runtime = new GameRuntime({ viewer: !values['no-viewer'], baseUrl: values[
   dataDir: values['data-dir'], instance: values.instance, width: values.width ? Number(values.width) : undefined,
   height: values.height ? Number(values.height) : undefined, fps: values.fps ? Number(values.fps) : undefined,
   bufferSeconds: values['buffer-seconds'] ? Number(values['buffer-seconds']) : undefined, evaluation,
-  telemetry: values.telemetry });
+  telemetry: values.telemetry, runId: values['run-id'] === undefined ? undefined : z.uuid().parse(values['run-id']),
+  legacySkySlot: values['legacy-sky-slot'] === undefined ? undefined : z.coerce.number().int().min(1).max(999).parse(values['legacy-sky-slot']) });
 const evaluationLog = path.resolve(values['evaluation-log'] || path.join(runtime.dataDir, 'evaluation.jsonl'));
 const resultFile = path.resolve(values['result-file'] || path.join(runtime.dataDir, 'result.json'));
 const reporter = evaluation ? await evaluationReporter(evaluationLog, resultFile) : undefined;
@@ -44,7 +46,7 @@ function tool(name, description, inputSchema, callback, readOnly = false) {
     annotations: { readOnlyHint: readOnly, destructiveHint: false, openWorldHint: !readOnly } },
   async (args, extra) => {
     try { return await callback(args, extra.signal); }
-    catch (error) { return { isError: true, content: [text({ error: error.message, status: runtime.status() })] }; }
+    catch (error) { return { isError: true, content: [text({ error: error.message, ...error.toolDetails, status: runtime.status() })] }; }
   });
 }
 
@@ -59,21 +61,22 @@ tool('library', 'Import local game ZIPs through ScummWEB’s normal file importe
   return { content: [text(await runtime.library({ operation, paths }))] };
 });
 
-tool('session', 'Manage the owned game session: start returns immediately; close preserves saves and clears history; open_viewer opens the read-only spectator. Only start accepts game/mode/restart. Starting the active game reuses it unless restart=true. Poll status for readiness.', {
+tool('session', 'Manage the owned game session: start returns immediately; close preserves saves and clears history; open_viewer opens the read-only spectator. Starting the active game reuses it unless restart=true. Poll status for readiness. Pass the same run_id with mode=continue to reopen its save scope in the same instance.', {
   operation: z.enum(['start', 'close', 'open_viewer']),
   game: z.string().optional().describe('Start only; defaults to flight-of-the-amazon-queen.'),
   mode: z.enum(['skip_intro', 'beginning', 'continue']).optional().describe('Start only; defaults to skip_intro.'),
   restart: z.boolean().optional().describe('Start only; defaults to false.'),
+  run_id: z.uuid().optional().describe('Start only; a new game gets a fresh run UUID by default.'),
 }, async ({ operation, ...args }) => {
   if (operation !== 'start' && Object.values(args).some(value => value !== undefined)) {
-    throw new Error('game, mode and restart are valid only for session(operation="start")');
+    throw new Error('game, mode, restart and run_id are valid only for session(operation="start")');
   }
   if (operation === 'start') return { content: [text(await runtime.start(args))] };
   if (operation === 'close') return { content: [text(await runtime.closeGame())] };
   return { content: [text({ viewerUrl: await runtime.viewer.open() })] };
 });
 
-tool('status', 'Check renderer/runtime health, startup progress, connection, history coverage, spectator and recent actions. Optional wait_ms waits up to 25 seconds while loading. Ready means rendered startup content; inspect the screen for menus or intros.', {
+tool('status', 'Check renderer/runtime health, startup progress, connection, history coverage, spectator and recent actions. nativeControls lists the available native actions or gives the reason they are unavailable. Optional wait_ms waits up to 25 seconds while loading. Ready means rendered startup content; inspect the screen for menus or intros.', {
   wait_ms: z.number().int().min(0).max(25000).default(0),
 }, async ({ wait_ms }) => ({ content: [text(await runtime.waitReady(wait_ms))] }), true);
 
@@ -108,7 +111,7 @@ tool('observe', 'Read game images without input. fresh (default) captures now, i
     ...frames.flatMap(frame => imageContent({ ...frame, source }))] };
 }, true);
 
-tool('act', 'Execute at most 32 ordered click/move/key/drag/wait/screenshot steps, including up to 8 explicit screenshots, with a 20-second hold/wait budget. Returns each requested screenshot with its step index plus a final screenshot and per-step status. Stops on failure and retains partial captures; no conditional execution. Reuse request_id only with identical arguments to retrieve the cached result without repeating input (last 100 requests).', {
+tool('act', 'Execute up to 32 ordered input, wait or screenshot steps, including up to 8 screenshots and 20 seconds of input holds/waits. A compatible ScummWEB run can also pause, resume, wait_ticks (advance exact native updates and hold), save(id) and load(id) using run-local integer save slots. Check status.nativeControls. A batch containing an unsupported native step is rejected before input with code NATIVE_CONTROL_UNSUPPORTED. Steps stop on failure. Reuse request_id only with identical arguments to retrieve the cached result without repeating input (last 100 requests).', {
   session_id: z.string().uuid(), request_id: z.string().min(1).max(100),
   frame_id: z.string().optional(), actions: z.array(actionSchema).min(1).max(32),
   after_ms: z.number().int().min(0).max(3000).default(200),
