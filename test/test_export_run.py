@@ -586,6 +586,21 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(stats["screenshots"]["unique_files"], 1)
         self.assertEqual(stats["screenshots"]["original_frame_ids"], 2)
 
+    def test_forwarded_frame_metadata_only_labels_the_next_image(self):
+        rows = fixture(complete=True)
+        frame = {"id": "frame-42", "sessionId": SESSION, "mimeType": "image/png", "width": 1}
+        output = rows[7]["payload"]["output"]
+        output.insert(0, {"type": "input_text", "text": json.dumps(frame)})
+        for data in (b"unlabeled screenshot", b"another unlabeled screenshot"):
+            output.append({"type": "input_image", "image_url":
+                           "data:image/png;base64," + base64.b64encode(data).decode()})
+        output.insert(3, {"type": "input_text", "text": '{"selectedFrames":1}'})
+        self.source(rows)
+        path, stats = self.export(status="completed", completion_note="Ending shown")
+        self.assertEqual(stats["screenshots"]["unique_files"], 3)
+        self.assertEqual(stats["screenshots"]["original_frame_ids"], 1)
+        self.assertEqual(EXPORT.verify_run(path), stats)
+
     def test_truncated_mcp_image_recovers_full_model_copy_and_frame_id(self):
         rows = fixture()
         partial = PNG[:20] + f"…{len(PNG) - 40} chars truncated…" + PNG[-20:]
@@ -709,6 +724,63 @@ class ExportTests(unittest.TestCase):
                 else:
                     with self.assertRaisesRegex(ValueError, "unavailable image"):
                         self.export(run_id=case, status="completed", completion_note="Ending shown")
+
+    def test_helper_recovers_group_with_matching_action_receipt(self):
+        rows = fixture(complete=True)
+        first = {"id": "frame-42", "sessionId": SESSION, "game": "synthetic-game",
+                 "actionId": "action-1", "mimeType": "image/png", "width": 1}
+        second_image = base64.b64encode(b"second image" * 20).decode()
+        receipt = {"action": {"actionId": "action-1", "requestId": "step-1", "steps": []},
+                   "selectedFrames": 2, "screenshots": []}
+        content = [{"type": "text", "text": json.dumps(receipt)}]
+        for frame, data in ((first, PNG), ({**first, "id": "frame-43"}, second_image)):
+            content.extend([{"type": "text", "text": json.dumps(frame)},
+                            {"type": "image", "mimeType": "image/png", "data": data}])
+        raw = json.dumps({"content": content})
+        lo, hi = raw.index(PNG) + 20, raw.index(second_image) + len(second_image) - 20
+        native = rows[6]["payload"]["item"]
+        native["result"] = {"content": [{"type": "text",
+            "text": raw[:lo] + f"…{hi - lo} chars truncated…" + raw[hi:]}]}
+        rows[7]["payload"]["output"] = [
+            {"type": "input_text", "text": json.dumps({**receipt,
+                "action": {"actionId": "action-1", "requestId": "step-1"}})},
+            *({"type": "input_image", "image_url": "data:image/png;base64," + data}
+              for data in (PNG, second_image))]
+        rows.insert(6, record("response_item", {"type": "custom_tool_call", "name": "exec",
+            "call_id": "call-1", "input": 'await eval(load("helper"))([])'}, 2))
+        self.source(rows)
+        path, stats = self.export(run_id="matched", status="completed", completion_note="Ending shown")
+        self.assertEqual(stats["screenshots"]["recovered_spanning_tool_summaries"], 1)
+        self.assertEqual(EXPORT.verify_run(path), stats)
+        rows[8]["payload"]["output"][0]["text"] = json.dumps({**receipt,
+            "action": {"actionId": "action-1", "requestId": "different"}})
+        self.source(rows)
+        with self.assertRaisesRegex(ValueError, "unavailable image"):
+            self.export(run_id="mismatched", status="completed", completion_note="Ending shown")
+
+    def test_completed_export_preserves_truncated_unforwarded_native_frame(self):
+        rows = fixture(complete=True)
+        data = base64.b64encode(b"unforwarded image" * 20).decode()
+        partial = data[:20] + f"…{len(data) - 40} chars truncated…" + data[-20:]
+        native = rows[6]["payload"]["item"]
+        decoded = json.loads(native["result"]["content"][0]["text"])
+        decoded["content"].insert(0, {"type": "text", "text": '{"selectedFrames":1}'})
+        decoded["content"][-1]["data"] = partial
+        native["result"]["content"][0]["text"] = json.dumps(decoded)
+        call = {"type": "custom_tool_call", "name": "exec", "call_id": "call-1",
+                "input": "await tools.mcp__agentscumm__act({});image(other)"}
+        rows.insert(6, record("response_item", call, 2))
+        self.source(rows)
+        path, stats = self.export(run_id="unforwarded", status="completed", completion_note="Ending shown")
+        gap, = stats["screenshots"]["unresolved"]
+        self.assertEqual(gap["scope"], "unforwarded_mcp_result")
+        self.assertIn(partial, (path / "trajectory.jsonl").read_text())
+        self.assertEqual(EXPORT.verify_run(path), stats)
+        call["input"] = ('const r=await tools.mcp__agentscumm__act({});'
+                         'for (const c of r.content??[]) if(c.type==="image")image(c);')
+        self.source(rows)
+        with self.assertRaisesRegex(ValueError, "unavailable image"):
+            self.export(run_id="forwarded", status="completed", completion_note="Ending shown")
 
     def test_truncated_image_without_full_copy_is_explicit(self):
         rows = fixture(complete=True)

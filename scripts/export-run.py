@@ -461,6 +461,7 @@ class Screenshots:
         self.ordered_recovered = 0
         self.spanning = {}
         self.spanning_recovered = 0
+        self.unforwarded = set()
         self.record_number, self.image_number = None, 0
 
     @staticmethod
@@ -627,6 +628,8 @@ class Screenshots:
                 if full and all(full):
                     groups = pending["groups"] or self.helper_forwarded_group(pending["results"], captions)
                     self.recover_forwarded_groups(groups, full)
+                    forwarded = {number for number, _, _ in groups}
+                    self.mark_unforwarded((entry for entry in pending["results"] if entry[0] not in forwarded), full)
                 cell = YIELDED_CELL.match(header) if pending["exec"] and isinstance(header, str) else None
                 if cell:
                     if full:
@@ -635,10 +638,33 @@ class Screenshots:
                     yielded[cell[1]] = pending
                 pending = None
 
+    def mark_unforwarded(self, results, full):
+        # A single native frame can be absent from the enclosing exec's complete
+        # image output. A summary spanning several frames cannot establish that.
+        for number, item, images in results:
+            tool = item.get("tool")
+            if item.get("server") != "agentscumm" or tool not in ("act", "observe") or len(images) != 1:
+                continue
+            result = item["result"]
+            selected = self.selected_frames(result)
+            frame = next((frame for obj in runtime_objects(result) if (frame := self.frame_metadata(obj))), None)
+            if not frame:
+                continue
+            fresh_observation = tool == "observe" and selected is None and frame.get("source") == "fresh"
+            if selected != 1 and not fresh_observation:
+                continue
+            image = images[0]
+            fragment = image["data"]
+            if isinstance(fragment, str) and TRUNCATED.fullmatch(fragment) and not any(
+                image.get("mimeType") == mime and self.fragment_matches(fragment, encoded)
+                for mime, encoded in full
+            ):
+                self.unforwarded.add((number, 0))
+
     def helper_forwarded_group(self, results, captions):
         # A helper call may hide the forwarding loop from the outer JS source.
-        # Require one image-producing result and matching frame metadata beside
-        # every output image before treating its output order as evidence.
+        # Require one image-producing result and matching metadata before treating
+        # its output order as evidence.
         if len(results) != 1:
             return []
         number, item, images = results[0]
@@ -650,6 +676,27 @@ class Screenshots:
             return []
         first = next((frame for obj in runtime_objects(result) if (frame := self.frame_metadata(obj))), None)
         if not first or not first.get("sessionId") or not first.get("game"):
+            return []
+        if captions[0] and all(caption is None for caption in captions[1:]):
+            try:
+                caption = json.loads(captions[0])
+            except ValueError:
+                return []
+            if not isinstance(caption, dict) or caption.get("selectedFrames") != expected:
+                return []
+            for obj in runtime_objects(result):
+                if obj.get("selectedFrames") != expected:
+                    continue
+                if item["tool"] == "act":
+                    fields = ("actionId", "requestId")
+                    action = caption.get("action", {})
+                    if (isinstance(action, dict) and isinstance(obj.get("action"), dict)
+                            and all(action.get(key) and action[key] == obj["action"].get(key) for key in fields)
+                            and first.get("actionId") == action["actionId"]
+                            and caption.get("screenshots") == obj.get("screenshots")):
+                        return [(number, images, expected)]
+                elif caption.get("source") == obj.get("source") and caption["source"] in ("frames", "history"):
+                    return [(number, images, expected)]
             return []
         prefix = dump({"sessionId": first["sessionId"], "game": first["game"]})[:-1] + ","
         if (all(isinstance(caption, str) and caption.startswith(prefix) for caption in captions)
@@ -722,8 +769,8 @@ class Screenshots:
             result = []
             # MCP imageContent puts each frame's metadata immediately before its image.
             for item in value:
-                frame = self.frame_metadata(item) or frame
                 result.append(self.transform(item, frame))
+                frame = self.frame_metadata(item)
             return result
         if isinstance(value, dict):
             if value.get("type") == "image" and "data" in value:
@@ -745,9 +792,11 @@ class Screenshots:
                 result = {k: v for k, v in value.items() if k != "data"}
                 if encoded is None:
                     reason = "truncated image has no unique full copy in the rollout"
-                    self.unresolved.append({"type": "image", "frame_id": frame.get("id") if frame else None,
-                                            "reason": reason})
-                    return {**result, "unavailable_image": {"reason": reason, "recorded_data": value["data"]}}
+                    gap = {"reason": reason}
+                    if (self.record_number, self.image_number - 1) in self.unforwarded:
+                        gap["scope"] = "unforwarded_mcp_result"
+                    self.unresolved.append({"type": "image", "frame_id": frame.get("id") if frame else None, **gap})
+                    return {**result, "unavailable_image": {**gap, "recorded_data": value["data"]}}
                 ref = self.save(encoded, value.get("mimeType"), frame)
                 return {**result, "screenshot": ref, **({"source_image_truncated": True} if truncated else {})}
             if value.get("type") in ("input_image", "image_url") and "image_url" in value:
@@ -884,7 +933,8 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
             require(isinstance(completion_note, str) and completion_note.strip(),
                     "Completed runs require a note describing observed ending evidence")
             require(not usage["warnings"], "Completed runs require a complete source snapshot")
-            require(not screenshots.unresolved, "Completed runs contain unavailable image references")
+            require(all(gap.get("scope") == "unforwarded_mcp_result" for gap in screenshots.unresolved),
+                    "Completed runs contain unavailable image references")
             require(screenshots.entries, "Completed runs require screenshot evidence")
             require(not skill_info["unresolved"], "Completed runs contain unavailable skill references")
         index = {"schema_version": 1, "screenshots": list(screenshots.entries.values())}
@@ -939,6 +989,8 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                 "Cached input is a subset of input; reasoning is a subset of output."]}
         if not revisions:
             stats["limitations"].append("AgentSCUMM's startup commit was not recorded for this run; the exporter checkout is not a substitute.")
+        if any(gap.get("scope") == "unforwarded_mcp_result" for gap in screenshots.unresolved):
+            stats["limitations"].append("Some unforwarded MCP screenshots survive only as truncated rollout fragments.")
         if progress:
             stats["verified_progress"] = progress
         if local_sequences:
@@ -1005,8 +1057,16 @@ def verify_run(directory):
         require(len(data) == entry["bytes"] and hashlib.sha256(data).hexdigest() == entry["sha256"] == identity[11:],
                 "Screenshot checksum mismatch")
     refs = Counter()
+    unforwarded_fragments = 0
     def walk(value):
+        nonlocal unforwarded_fragments
         if isinstance(value, dict):
+            gap = value.get("unavailable_image")
+            if isinstance(gap, dict) and gap.get("scope") == "unforwarded_mcp_result":
+                fragment = gap.get("recorded_data")
+                require(isinstance(fragment, str) and TRUNCATED.fullmatch(fragment),
+                        "Missing unforwarded screenshot fragment")
+                unforwarded_fragments += 1
             if {"id", "path", "sha256"} <= value.keys() and str(value["id"]).startswith("screenshot-"):
                 require(value["id"] in images, "Missing screenshot reference")
                 entry = images[value["id"]]
@@ -1034,6 +1094,11 @@ def verify_run(directory):
     require(count == stats["trajectory"]["records"] == stats["source"]["records"], "Record count mismatch")
     require(sum(refs.values()) == stats["screenshots"]["references_in_trajectory"], "Screenshot reference count mismatch")
     require(all(refs[key] == entry["references"] for key, entry in images.items()), "Unreferenced screenshot or wrong reference count")
+    unresolved = stats["screenshots"].get("unresolved", [])
+    require(unforwarded_fragments == sum(gap.get("scope") == "unforwarded_mcp_result" for gap in unresolved),
+            "Unforwarded screenshot fragment count mismatch")
+    require(stats["status"] != "completed" or len(unresolved) == unforwarded_fragments,
+            "Completed runs contain unavailable image references")
     if "skills" in stats:
         verify_skills(directory, stats["skills"])
     if "agent_context" in stats:

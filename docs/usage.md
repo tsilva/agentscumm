@@ -165,6 +165,9 @@ story milestones and does not estimate time remaining.
 When progress is available, the spectator footer shows the percentage and the
 first milestone still to reach. At 100%, it shows the percentage alone. This
 summary appears in the spectator, outside game screenshots and MCP results.
+During normal play, the tracker can process a late telemetry read when it
+arrives. If a telemetry error stops tracking, the private session log records
+the reason in a `progress-error` entry.
 
 To watch progress without automatically stopping the game, supply
 `--evaluation-log /absolute/run/variables.jsonl` and omit `--stop-condition`.
@@ -345,13 +348,13 @@ Results distinguish captured screenshots, delivered inputs and uncertain deliver
 
 ### Native game time and saves
 
-Native actions currently work in **Beneath a Steel Sky** (the Sky engine) on a compatible ScummWEB build. For any game, `status.nativeControls` reports `available` and the supported `actions`. When unavailable it returns an empty list and a reason, such as `engine_not_advertised`, `runtime_bridge_missing`, or `unscoped_run`. The engine can advertise controls after the first game frame, so status checks again until the controls become available.
+Native actions work in **Beneath a Steel Sky** (Sky) and the full **Flight of the Amazon Queen** (Queen) on a compatible ScummWEB build. For any game, `status.nativeControls` reports `available` and the supported `actions`. When unavailable it returns an empty list and a reason, such as `engine_not_advertised`, `runtime_bridge_missing`, or `unscoped_run`. The engine can advertise controls after the first game frame, so status checks again until the controls become available.
 
-If a batch requests an unavailable native action, `act` rejects the whole batch before sending input. The MCP error includes `code: "NATIVE_CONTROL_UNSUPPORTED"`, the requested `control`, and the `reason`. Ordinary input and screenshots remain available. Each successful native step reports its confirmed `tick` and `paused` state. A tick is one update of the game's logic, independent of screenshot FPS or wall-clock time. Native requests have a 10-second per-operation deadline and a shared 20-second batch window.
+If a batch requests an unavailable native action, `act` rejects the whole batch before sending input. The MCP error includes `code: "NATIVE_CONTROL_UNSUPPORTED"`, the requested `control`, and the `reason`. Ordinary input and screenshots remain available. Each successful native step reports its confirmed `tick` and `paused` state. A tick is one engine update, independent of screenshot FPS. Queen counts rendered updates, including walks and cutaways. Native requests share a 20-second batch window. `wait_ticks` can use the remaining window, and other native operations have a 10-second limit.
 
 Use `pause → screenshot` to inspect a stable scene, then `wait_ticks → screenshot` to step forward. In `resume → wait_ticks → pause`, the server hands the tick budget to the engine before releasing it, so the batch advances exactly the requested ticks. An immediately following click in `resume → click` is queued before releasing a paused engine. `wait` and `after_ms` still measure wall-clock time.
 
-`save` and `load` use ScummVM's normal save format and obey the engine's restrictions on the current scene. Saving to an existing ID replaces that slot in the run. Loading a missing ID fails and stops the batch. A paused load stays paused and renders the restored scene. Observe again before choosing actions based on the restored state.
+`save` and `load` use ScummVM's normal save format and obey the engine's restrictions on the current scene. Queen exposes slots 1–98 and requires a boundary between commands and room transitions. Saving to an existing ID replaces that slot in the run. Loading a missing ID fails and stops the batch. A paused load stays paused and renders the restored scene. Observe again before choosing actions based on the restored state.
 
 Fresh game launches get a new `runId` by default. Native saves are scoped to that run, game and owned browser profile. To reopen them after closing a session or restarting the server, use the same browser data directory and call `session(operation="start", mode="continue", run_id=...)` with the returned run ID. This loads the latest native save, after which `load` can select a different slot. The local Play Game client retains its run ID across `--resume`. An unscoped `continue` with no configured run ID remains available for existing browser saves.
 

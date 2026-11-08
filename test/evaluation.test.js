@@ -372,6 +372,32 @@ test('missing engine telemetry fails explicitly without a visual fallback', { ti
   assert.match(result.error, /does not provide evaluation variables/);
 });
 
+test('a slow telemetry read does not stop progress tracking during normal play', async t => {
+  const runtime = new GameRuntime({ viewer: false });
+  const evaluation = new RunEvaluation();
+  await evaluation.beginSession(queenSlug);
+  runtime.phase = 'ready';
+  runtime.sessionEvaluation = evaluation;
+  runtime.log = async () => {};
+  runtime.shell = { evaluate: async () => ({ current: state(70, 2), events: [],
+    gameVariableEvents: [progressBaseline(1)] }) };
+  await runtime.pollEvaluation();
+  assert.equal(runtime.spectatorProgress.percent, 0);
+
+  const read = Promise.withResolvers();
+  runtime.shell.evaluate = () => read.promise;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = runtime.pollEvaluation();
+  t.mock.timers.tick(2000);
+  await new Promise(resolve => setImmediate(resolve));
+  read.resolve({ current: state(70, 4), events: [], gameVariableEvents: [
+    { event: 'game_variables_change', native_time_ms: 3, bank: 'game_state', index: 91, previous: 0, value: 1 },
+  ] });
+  await pending;
+  assert.equal(evaluation.result, undefined);
+  assert.equal(runtime.spectatorProgress.percent, 4);
+});
+
 test('normal play logs progress and updates the spectator footer', { timeout: 20000 }, async t => {
   const fixture = await startFixture({ evaluation: 'progress' });
   const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-progress-'));
@@ -406,6 +432,12 @@ test('normal play logs progress and updates the spectator footer', { timeout: 20
   await expectFooter('100%');
   await publish(progressBaseline(0), state(70, 0));
   await expectFooter('0% · Next: Secured the sheet rope to the radiator');
+  await runtime.shell.evaluate(() => { globalThis.__scummwebEvaluationGameVariableOverflow = true; });
+  await runtime.pollEvaluation();
+  assert.equal(runtime.status().phase, 'ready');
+  assert.equal(runtime.spectatorProgress, undefined);
+  const finalLog = await readFile(path.join(dataDir, 'runs', `${sessionId}.jsonl`), 'utf8');
+  assert.match(finalLog, /"type":"progress-error"[^\n]+"message":"[^"]*Game variable telemetry queue overflow/);
   await runtime.closeGame();
   await viewer.locator('#story-progress').waitFor({ state: 'hidden' });
 });

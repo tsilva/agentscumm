@@ -631,7 +631,7 @@ export class GameRuntime {
           await this.assertReady(sessionId);
         }
         if (afterMs) await sleep(afterMs, undefined, { signal: inputSignal });
-        if (!this.evaluation) await this.pollEvaluation();
+        if (!this.evaluation) void this.pollEvaluation();
         await this.assertReady(sessionId);
         result.frame = await this.capture('after-action');
         record.state = 'completed';
@@ -658,7 +658,8 @@ export class GameRuntime {
 
   async executeNative(action, deadline, signal) {
     signal.throwIfAborted();
-    const timeoutMs = Math.min(10000, Math.floor(deadline - performance.now()));
+    const remaining = Math.floor(deadline - performance.now());
+    const timeoutMs = action.type === 'wait_ticks' ? remaining : Math.min(10000, remaining);
     if (timeoutMs < 1) throw new Error('Native action batch timed out');
     const result = await bounded(this.shell.evaluate(({ action, saveScope, timeoutMs }) => {
       const controls = globalThis.scummwebAgentControls;
@@ -742,8 +743,12 @@ export class GameRuntime {
     const isCurrent = () => this.shell === shell && this.sessionId === sessionId && this.phase === 'ready';
     this.evaluationRead = (async () => {
       try {
-        const payload = await bounded(shell.evaluate(readEvaluation, evaluation.progressTracker?.usesSnapshots),
-          2000, 'Evaluator could not read engine telemetry');
+        const read = shell.evaluate(readEvaluation, evaluation.progressTracker?.usesSnapshots);
+        // The read drains the engine's queues. During normal play, keep its result
+        // even if it arrives late. An explicit trial still needs a bounded read.
+        const payload = this.evaluation
+          ? await bounded(read, 2000, 'Evaluator could not read engine telemetry')
+          : await read;
         if (!isCurrent()) return;
         const hasTelemetry = evaluation.requiresRoomTelemetry ? payload.current
           : payload.gameVariableEvents != null || (!evaluation.gamePredicates.length &&
@@ -758,7 +763,11 @@ export class GameRuntime {
             await this.log('progress', { progress: evaluation.progress });
           }
         }
-      } catch (error) { if (isCurrent()) evaluation.fail(error); }
+      } catch (error) {
+        if (!isCurrent()) return;
+        evaluation.fail(error);
+        if (!this.evaluation) await this.log('progress-error', { message: error.message }).catch(() => {});
+      }
     })();
     try { await this.evaluationRead; } finally { this.evaluationRead = null; }
   }
