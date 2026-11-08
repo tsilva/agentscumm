@@ -141,8 +141,10 @@ class FinalizationTests(unittest.TestCase):
             return {"timestamp": record("unused", {}, second)["timestamp"], "request": request, "result": result}
 
         def status(session, game):
+            revision = {"repository": "agentscumm", "commit_id": ("a" if session == local_session else "b") * 40,
+                        "dirty": False, "mcp_version": "0.2.0", "mcp_tools": ["act", "status"]}
             return event(1, {"name": "status"}, {"name": "status", "content": [
-                {"sessionId": session, "game": game, "dataDir": profile}]})
+                {"sessionId": session, "game": game, "dataDir": profile, "sourceRevision": revision}]})
 
         def act(second, session=local_session):
             return event(second, {"name": "act", "arguments": {"session_id": session, "request_id": "local",
@@ -164,9 +166,11 @@ class FinalizationTests(unittest.TestCase):
         self.assertEqual(stats["total_action_sequences"], 3)
         self.assertEqual(stats["action_sequences"]["mean_length"], 8 / 3)
         self.assertEqual(stats["sessions"], sorted([SESSION, local_session]))
+        self.assertEqual([r["commit_id"] for r in stats["git"]["agentscumm_gameplay_runtime"]], ["a" * 40])
         benchmark = (self.repo / "BENCHMARKS.md").read_text()
         self.assertEqual(benchmark.count(stats["trajectory"]["sha256"]), 1)
         self.assertIn("| 8 | 3 <!-- agentscumm:benchmark:", benchmark)
+        self.assertIn("| 0.2.0 @ aaaaaaa | Server · act, status |", benchmark)
         self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
         self.assertEqual((self.repo / "BENCHMARKS.md").read_text(), benchmark)
 
@@ -229,9 +233,9 @@ class FinalizationTests(unittest.TestCase):
         self.source(fixture())
         archive, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo)
         self.assertTrue(FINAL.register_benchmark(archive, repo=self.repo))
-        self.assertTrue(FINAL.benchmark_entry(stats).startswith("| Unknown |"))
-        self.assertIn("Unspecified", FINAL.benchmark_entry(stats))
-        self.assertNotIn("Unaided", FINAL.benchmark_entry(stats))
+        self.assertTrue(FINAL.benchmark_row(FINAL.benchmark_cells(stats)).startswith("| Unknown |"))
+        self.assertIn("Unspecified", FINAL.benchmark_row(FINAL.benchmark_cells(stats)))
+        self.assertNotIn("Unaided", FINAL.benchmark_row(FINAL.benchmark_cells(stats)))
 
     def test_unfinished_progress_is_recorded_and_shown_as_an_estimate(self):
         self.source(fixture())
@@ -243,7 +247,7 @@ class FinalizationTests(unittest.TestCase):
         self.assertIn("| ~42.5% |", (self.repo / "BENCHMARKS.md").read_text())
         for status in ("in_progress", "blocked", "stopped"):
             stats["status"] = status
-            self.assertTrue(FINAL.benchmark_entry(stats).startswith("| ~42.5% |"))
+            self.assertTrue(FINAL.benchmark_row(FINAL.benchmark_cells(stats)).startswith("| ~42.5% |"))
 
     def test_unfinished_queen_uses_latest_verified_sample_through_the_archive_cutoff(self):
         game = "flight-of-the-amazon-queen"
@@ -280,7 +284,7 @@ class FinalizationTests(unittest.TestCase):
         self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
         self.assertNotIn(str(profile), benchmark.read_text())
         for run_status in ("in_progress", "blocked", "stopped"):
-            self.assertTrue(FINAL.benchmark_entry({**stats, "status": run_status}).startswith("| 2/7 · "))
+            self.assertTrue(FINAL.benchmark_row(FINAL.benchmark_cells({**stats, "status": run_status})).startswith("| 2/7 · "))
         stats["verified_progress"]["completed"] = 7
         (archive / "run.json").write_text(json.dumps(stats))
         with self.assertRaisesRegex(ValueError, "milestone count"):
@@ -304,7 +308,7 @@ class FinalizationTests(unittest.TestCase):
         rows[5]["payload"]["item"]["arguments"]["game"] = game
         self.source(rows)
         _, stats = FINAL.EXPORT.export_run(self.rollout, game, repo=self.repo, status="blocked")
-        self.assertTrue(FINAL.benchmark_entry(stats).startswith("| 0/7 · No milestones verified |"))
+        self.assertTrue(FINAL.benchmark_row(FINAL.benchmark_cells(stats)).startswith("| 0/7 · No milestones verified |"))
         sample["progress"] = {"game": game, "state": "unavailable", "total": 7, "reason": "missing_game_variables"}
         with log.open("a") as output:
             output.write(json.dumps(sample) + "\n")
@@ -313,7 +317,7 @@ class FinalizationTests(unittest.TestCase):
         _, unavailable = FINAL.EXPORT.export_run(self.rollout, game, repo=self.repo, status="blocked",
             run_id="after-restore", agent_context=context, estimated_progress=25)
         self.assertNotIn("verified_progress", unavailable)
-        self.assertTrue(FINAL.benchmark_entry(unavailable).startswith("| ~25% |"))
+        self.assertTrue(FINAL.benchmark_row(FINAL.benchmark_cells(unavailable)).startswith("| ~25% |"))
 
     def test_comparison_table_appends_runs_as_contiguous_rows_and_preserves_notes(self):
         self.source(fixture(complete=True))
@@ -335,18 +339,18 @@ class FinalizationTests(unittest.TestCase):
         self.assertTrue(all(line.startswith("|") for line in table))
         parsed = [[cell.strip() for cell in re.sub(r"<!--.*?-->", "", line).split("|")[1:-1]] for line in table[2:]]
         self.assertEqual(len(parsed), 2)
-        self.assertTrue(all(len(row) == 12 for row in parsed))
+        self.assertTrue(all(len(row) == 13 for row in parsed))
         self.assertEqual(parsed[0][0], "✅")
-        self.assertEqual(parsed[0][3], "test-model / high")
-        self.assertEqual(parsed[1][3], "comparison-model / high")
-        self.assertEqual(parsed[0][2], "$0.00")
-        self.assertEqual(parsed[1][2], "$0.00")
-        self.assertEqual(parsed[0][9:11], ["100 (70.00%)", "20"])
-        self.assertEqual(parsed[1][9:11], ["100 (70.00%)", "20"])
-        self.assertEqual(parsed[0][6:8], ["2", "1"])
-        self.assertEqual(parsed[1][6:8], ["3", "1"])
-        self.assertEqual(parsed[1][8], f"{stats['tokens']['total_tokens']:,}")
-        self.assertEqual(parsed[1][4], "Unspecified")
+        self.assertEqual(parsed[0][2], "test-model / high")
+        self.assertEqual(parsed[1][2], "comparison-model / high")
+        self.assertEqual(parsed[0][1], "$0.00")
+        self.assertEqual(parsed[1][1], "$0.00")
+        self.assertEqual(parsed[0][8:10], ["100 (70.00%)", "20"])
+        self.assertEqual(parsed[1][8:10], ["100 (70.00%)", "20"])
+        self.assertEqual(parsed[0][5:7], ["2", "1"])
+        self.assertEqual(parsed[1][5:7], ["3", "1"])
+        self.assertEqual(parsed[1][7], f"{stats['tokens']['total_tokens']:,}")
+        self.assertEqual(parsed[1][3], "Unspecified")
         self.assertIn("Editorial note retained.", text)
         self.assertFalse(FINAL.register_benchmark(first["archive"], repo=self.repo))
         self.assertFalse(FINAL.register_benchmark(second, repo=self.repo))
@@ -357,13 +361,41 @@ class FinalizationTests(unittest.TestCase):
         archive, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo,
             status="completed", completion_note="Ending observed")
         stats["recorded_through"] = "2026-11-06T00:30:00+01:00"
-        row = FINAL.benchmark_entry(stats, "Synthetic Adventure")
+        row = FINAL.benchmark_row(FINAL.benchmark_cells(stats))
         parsed = [cell.strip() for cell in re.sub(r"<!--.*?-->", "", row).split("|")[1:-1]]
         self.assertEqual(parsed[0], "✅")
-        self.assertEqual(parsed[11], "2026-11-05")
-        self.assertEqual(parsed[5], "00:00:07")
+        self.assertEqual(parsed[10].split()[0], "2026-11-05")
+        self.assertEqual(parsed[4], "00:00:07")
         self.assertEqual(len(row.splitlines()), 1)
         self.assertNotIn("Europe/", row)
+
+    def test_game_sections_sort_by_cutoff_even_when_runs_register_out_of_order(self):
+        self.source(fixture())
+        _, stats = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo)
+        text = "# Benchmarks\n\nEditorial note.\n"
+        for digest, model, game_id, cutoff in [
+            ("a", "Middle", "synthetic-game", "2026-11-08T09:00:00Z"),
+            ("b", "Other", "another-game", "2026-11-09T11:00:00Z"),
+            ("c", "Oldest", "synthetic-game", "2026-11-07T11:00:00Z"),
+            ("d", "Newest", "synthetic-game", "2026-11-08T11:00:00Z"),
+        ]:
+            run = {**stats, "game_id": game_id, "recorded_through": cutoff, "models": [model],
+                   "trajectory": {"sha256": digest * 64}}
+            text, added = FINAL.update_benchmark(text, run, None)
+            self.assertTrue(added)
+        self.assertEqual(text.count("## Synthetic Game"), 1)
+        self.assertEqual(text.count("## Another Game"), 1)
+        self.assertLess(text.index("Newest"), text.index("Middle"))
+        self.assertLess(text.index("Middle"), text.index("Oldest"))
+        self.assertLess(text.index("Oldest"), text.index("## Another Game"))
+        self.assertIn("Editorial note.", text)
+
+    def test_benchmark_excludes_attached_preflight_when_gameplay_used_only_local_mcp(self):
+        attached = {"commit_id": "a" * 40, "dirty": True}
+        local = {"commit_id": "b" * 40, "dirty": False, "mcp_version": "0.2.0", "mcp_tools": ["act", "status"]}
+        stats = {"git": {"agentscumm_runtime": [attached], "agentscumm_gameplay_runtime": [local]},
+                 "local_mcp_action_sequences": 4, "mcp_tool_calls": {"agentscumm.status": 1}}
+        self.assertEqual(FINAL.benchmark_mcp(stats), ("0.2.0 @ bbbbbbb", "Server · act, status"))
 
     def test_legacy_table_upgrade_preserves_rows_notes_and_registration_identity(self):
         self.source(fixture(complete=True))
@@ -380,7 +412,8 @@ class FinalizationTests(unittest.TestCase):
         self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
         usage = "| 100 (70.00%) | 20 |"
         self.assertIn(usage, upgraded)
-        self.assertIn("| Synthetic Game | $0.00 |", upgraded)
+        self.assertIn("## Synthetic Game", upgraded)
+        self.assertIn("| ✅ | $0.00 |", upgraded)
         self.assertIn("Editorial note preserved.", upgraded)
         self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
         self.assertEqual(path.read_text(), upgraded)
@@ -400,7 +433,7 @@ class FinalizationTests(unittest.TestCase):
             "", FINAL.PREVIOUS_BENCHMARK_PRICING_NOTES,
         ])
         upgraded = FINAL.upgrade_benchmark_table(original)
-        self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
+        self.assertIn(FINAL.FLAT_BENCHMARK_HEADER, upgraded)
         self.assertIn("| Example | $0.25 |", upgraded)
         self.assertIn("| 1,300 (61.54%) | 20 | 2000-01-01 |", upgraded)
         self.assertIn("| 0 (N/A) | 0 | 2000-01-02 |", upgraded)
@@ -418,7 +451,7 @@ class FinalizationTests(unittest.TestCase):
             "", "Editorial note retained.",
         ])
         upgraded = FINAL.upgrade_benchmark_table(original)
-        self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
+        self.assertIn(FINAL.FLAT_BENCHMARK_HEADER, upgraded)
         self.assertIn(f"| ✅ | Example | $0.25 | test-model | Yes | 00:01:00 | 4 | 2 {marker} | "
                       "1,320 | 1,300 (61.54%) | 20 | 2000-01-01 |", upgraded)
         self.assertNotIn("Standard assumed", upgraded)
@@ -434,7 +467,7 @@ class FinalizationTests(unittest.TestCase):
             "| ✅ | Example | Unknown | test-model | Yes | 00:01:00 | 4 | 2 | 120 | 100 | 20 | Unknown | 2000-01-02 |",
         ])
         upgraded = FINAL.upgrade_benchmark_table(original)
-        self.assertIn(FINAL.BENCHMARK_HEADER, upgraded)
+        self.assertIn(FINAL.FLAT_BENCHMARK_HEADER, upgraded)
         self.assertIn("| Example | $0.25 | test-model | Yes | 00:01:00 | 4 | 2 | "
                       "1,320 | 1,300 (76.92%) | 20 | 2000-01-01 |", upgraded)
         self.assertIn("| 100 (Unknown) | 20 | 2000-01-02 |", upgraded)
@@ -443,7 +476,7 @@ class FinalizationTests(unittest.TestCase):
     def test_inline_cache_table_moves_cached_label_to_header(self):
         original = "\n".join([
             FINAL.INLINE_CACHE_BENCHMARK_HEADER,
-            FINAL.BENCHMARK_SEPARATOR,
+            FINAL.FLAT_BENCHMARK_SEPARATOR,
             "| ✅ | Example | $0.25 | test-model | Yes | 00:01:00 | 4 | 2 | 120 | 100 (70.00% cached) | 20 | 2000-01-01 |",
         ])
         upgraded = FINAL.upgrade_benchmark_table(original)
@@ -453,7 +486,7 @@ class FinalizationTests(unittest.TestCase):
 
     def test_tokens_header_is_renamed_without_changing_rows(self):
         row = "| ✅ | Example | $0.25 | test-model | Yes | 00:01:00 | 4 | 2 | 120 | 100 (70.00%) | 20 | 2000-01-01 |\n"
-        original = FINAL.PERCENTAGE_BENCHMARK_HEADER + "\n" + FINAL.BENCHMARK_SEPARATOR + "\n" + row
+        original = FINAL.PERCENTAGE_BENCHMARK_HEADER + "\n" + FINAL.FLAT_BENCHMARK_SEPARATOR + "\n" + row
         upgraded = FINAL.upgrade_benchmark_table(original)
         self.assertIn("| Total tokens | Input tokens (% cached) |", upgraded)
         self.assertEqual(upgraded.splitlines(keepends=True)[2], row)

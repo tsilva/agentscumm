@@ -177,16 +177,20 @@ def local_runtime_telemetry(repo, game, run_id, agent_context, work_dir, started
         if context_work.parent == root:
             work = context_work
     latest = None
-    sessions, sequences = set(), []
+    sessions, sequences, revisions = set(), [], []
     for event in private_records(work / "events.jsonl"):
         when = USAGE.timestamp(event["timestamp"])
         if not started <= when <= end:
             continue
         result = event.get("result", {})
         if result.get("name") in ("session", "status") and not result.get("isError"):
-            session = runtime_session(runtime_objects(result))
+            objects = list(runtime_objects(result))
+            session = runtime_session(objects)
             if session and session[1:] == (game, work / "browser"):
                 sessions.add(session[0])
+                for revision in runtime_revisions(objects):
+                    if revision not in revisions:
+                        revisions.append(revision)
                 if latest is None or when > latest[0]:
                     latest = when, session
         request = event.get("request")
@@ -199,7 +203,7 @@ def local_runtime_telemetry(repo, game, run_id, agent_context, work_dir, started
         if (isinstance(session_id, str) and isinstance(steps, list)
                 and all(isinstance(step, dict) and isinstance(step.get("type"), str) for step in steps)):
             sequences.append((session_id, [step["type"] for step in steps]))
-    return latest, sessions, [steps for session_id, steps in sequences if session_id in sessions]
+    return latest, sessions, [steps for session_id, steps in sequences if session_id in sessions], revisions
 
 
 def verified_run_progress(active, game, started, end):
@@ -862,6 +866,7 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
         counts, tools, actions, contexts = Counter(), Counter(), Counter(), []
         sequence_lengths = []
         seen_tools, sessions, observed_games, revisions = set(), set(), set(), []
+        attached_revisions, attached_actions = {}, set()
         active_session = None
         last_task, end, source_records, model_images, tool_seconds = None, started, 0, 0, 0.0
         trajectory = staging / "trajectory.jsonl"
@@ -893,7 +898,8 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                             args = item.get("arguments", {})
                             if item.get("server") == "agentscumm":
                                 objects = list(runtime_objects(item.get("result", {})))
-                                for revision in runtime_revisions(objects):
+                                reported_revisions = list(runtime_revisions(objects))
+                                for revision in reported_revisions:
                                     if revision not in revisions:
                                         revisions.append(revision)
                                 if item.get("tool") in ("status", "session", "launch_game"):
@@ -901,12 +907,17 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                                     if session:
                                         sessions.add(session[0])
                                         active_session = when, session
+                                        if session[1] == game_id and reported_revisions:
+                                            known = attached_revisions.setdefault(session[0], [])
+                                            known.extend(r for r in reported_revisions if r not in known)
                                 if args.get("session_id"):
                                     sessions.add(args["session_id"])
                                 if (item.get("tool") == "launch_game" or
                                         (item.get("tool") == "session" and args.get("operation") == "start")) and args.get("game"):
                                     observed_games.add(args["game"])
                                 if item.get("tool") == "act":
+                                    if args.get("session_id"):
+                                        attached_actions.add(args["session_id"])
                                     sequence_lengths.append(len(args.get("actions", [])))
                                     actions.update(a["type"] for a in args.get("actions", []))
                 if record.get("type") == "response_item" and payload.get("type") in TOOL_OUTPUT_TYPES:
@@ -917,8 +928,13 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                 output.write(dump(screenshots.transform(record)) + "\n")
         require(not observed_games or observed_games == {game_id},
                 "Rollout contains a different game; select a single-game conversation")
-        local_session, local_sessions, local_sequences = local_runtime_telemetry(
+        local_session, local_sessions, local_sequences, local_revisions = local_runtime_telemetry(
             Path(repo).resolve(), game_id, run_id, agent_context, work_dir, started, end)
+        gameplay_revisions = []
+        for session_id, reported_revisions in attached_revisions.items():
+            if session_id in attached_actions or (not attached_actions and not local_sessions):
+                gameplay_revisions.extend(r for r in reported_revisions if r not in gameplay_revisions)
+        gameplay_revisions.extend(r for r in local_revisions if r not in gameplay_revisions)
         sessions.update(local_sessions)
         for steps in local_sequences:
             sequence_lengths.append(len(steps))
@@ -987,7 +1003,9 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                 "Screenshots are those embedded in the conversation, not every periodic MCP buffer frame.",
                 "Wall time includes pauses; summed tool time can overlap across concurrent calls.",
                 "Cached input is a subset of input; reasoning is a subset of output."]}
-        if not revisions:
+        if gameplay_revisions or local_sessions:
+            stats["git"]["agentscumm_gameplay_runtime"] = gameplay_revisions
+        if not revisions and not local_revisions:
             stats["limitations"].append("AgentSCUMM's startup commit was not recorded for this run; the exporter checkout is not a substitute.")
         if any(gap.get("scope") == "unforwarded_mcp_result" for gap in screenshots.unresolved):
             stats["limitations"].append("Some unforwarded MCP screenshots survive only as truncated rollout fragments.")

@@ -32,8 +32,12 @@ SEPARATE_CACHE_BENCHMARK_HEADER = "| Status | Game | Total API cost (USD) | Mode
 SEPARATE_CACHE_BENCHMARK_SEPARATOR = "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
 INLINE_CACHE_BENCHMARK_HEADER = "| Status | Game | Total API cost (USD) | Model / effort | Walkthrough assistance | Completion time | Total actions | Action sequences | Tokens | Input tokens | Output tokens | Date (UTC) |"
 PERCENTAGE_BENCHMARK_HEADER = INLINE_CACHE_BENCHMARK_HEADER.replace("| Input tokens |", "| Input tokens (% cached) |")
-BENCHMARK_HEADER = PERCENTAGE_BENCHMARK_HEADER.replace("| Tokens |", "| Total tokens |")
-BENCHMARK_SEPARATOR = "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+FLAT_BENCHMARK_HEADER = PERCENTAGE_BENCHMARK_HEADER.replace("| Tokens |", "| Total tokens |")
+FLAT_BENCHMARK_SEPARATOR = "| --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"
+BENCHMARK_HEADER = FLAT_BENCHMARK_HEADER.replace(" Game |", "").rstrip() + " MCP version | MCP tools |"
+BENCHMARK_SEPARATOR = FLAT_BENCHMARK_SEPARATOR.replace("--- | --- |", "--- |", 1) + " --- | --- |"
+GAME_SECTION = re.compile(r"## (.+)\n<!-- agentscumm:game:([a-z0-9-]+) -->\n")
+BENCHMARK_TIME = re.compile(r"<!-- agentscumm:recorded-through:([0-9T:.+-]+) -->")
 BENCHMARK_NOTES = ("✅ marks a completed archive. Unfinished runs show the verified milestone count and latest milestone when available. "
                    "Otherwise they show a declared estimate or Unknown. "
                    "Time is elapsed conversation time (HH:MM:SS), including pauses and resumes, or elapsed so far for unfinished runs. "
@@ -167,50 +171,113 @@ def benchmark_actions(stats):
             f"{stats.get('total_action_sequences', stats['action_sequences']['count']):,}"]
 
 
-def benchmark_entry(stats, title=None):
+def benchmark_marker(stats):
     digest = stats["trajectory"]["sha256"]
     require(re.fullmatch(r"[0-9a-f]{64}", digest), "Invalid trajectory checksum")
-    title = title or stats["game_id"].replace("-", " ").title()
-    completed = EXPORT.USAGE.timestamp(stats["recorded_through"]).astimezone(timezone.utc).date()
+    return f"<!-- agentscumm:benchmark:{digest} -->"
+
+
+def benchmark_revisions(stats):
+    git = stats.get("git") or {}
+    if "agentscumm_gameplay_runtime" in git:
+        return git["agentscumm_gameplay_runtime"]
+    if stats.get("local_mcp_action_sequences") and not stats.get("mcp_tool_calls", {}).get("agentscumm.act"):
+        return []
+    return git.get("agentscumm_runtime") or []
+
+
+def benchmark_mcp(stats):
+    revisions = benchmark_revisions(stats)
+    versions, inventories = [], []
+    for revision in revisions:
+        version = revision.get("mcp_version") or ""
+        if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][a-zA-Z0-9.+-]+)?", version):
+            version = ""
+        commit = revision.get("commit_id") or ""
+        if isinstance(commit, str) and re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", commit):
+            version = " @ ".join(filter(None, (version, commit[:7])))
+        version = version or "Unknown"
+        if revision.get("dirty") is True:
+            version += " (dirty)"
+        versions.append(version)
+        inventory = revision.get("mcp_tools")
+        if isinstance(inventory, list) and inventory and all(
+                isinstance(name, str) and re.fullmatch(r"[a-zA-Z0-9_.-]+", name) for name in inventory):
+            inventories.append((version, ", ".join(sorted(inventory))))
+    version_text = ", ".join(dict.fromkeys(versions)) or "Unknown"
+    if inventories:
+        partial = len(inventories) != len(revisions)
+        inventories = list(dict.fromkeys(inventories))
+        tools = inventories[0][1] if len({names for _, names in inventories}) == 1 else " / ".join(
+            f"{version} · {names}" for version, names in inventories)
+        if partial:
+            tools += " (inventory unknown for some revisions)"
+        return version_text, "Server · " + tools
+
+    context_tools = (stats.get("agent_context") or {}).get("tools", {})
+    prefix = "mcp.agentscumm."
+    startup = sorted({tool["name"][len(prefix):] for tool in context_tools.get("available_at_start", [])
+                      if tool["name"].startswith(prefix)})
+    if startup:
+        coverage = " (partial)" if not context_tools.get("inventory_complete") else ""
+        return version_text, f"Chat startup{coverage} · " + ", ".join(startup)
+    prefix = "agentscumm."
+    observed = sorted(name[len(prefix):] for name in stats.get("mcp_tool_calls", {}) if name.startswith(prefix))
+    return version_text, "Startup unknown. Observed " + ", ".join(observed) if observed else "Unknown"
+
+
+def benchmark_cells(stats):
+    completed = EXPORT.USAGE.timestamp(stats["recorded_through"]).astimezone(timezone.utc)
     seconds = round(stats["wall_clock_seconds"])
     input_tokens, output_tokens, api_cost = benchmark_usage(stats)
     cells = [
-        benchmark_status(stats), title, api_cost,
+        benchmark_status(stats), api_cost,
         ", ".join(stats["models"]) + " / " + (", ".join(stats["reasoning_levels"]) or "Unknown"),
         "Yes" if stats["walkthrough_urls"] else "Unspecified",
         f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}",
         *benchmark_actions(stats),
         f"{stats['tokens']['total_tokens']:,}",
-        input_tokens, output_tokens, completed.isoformat(),
+        input_tokens, output_tokens, completed.date().isoformat(), *benchmark_mcp(stats),
     ]
     # Keep the deduplication marker inside the row so Markdown renders one table.
     cells = [public_text(value) for value in cells]
-    cells[7] += f" <!-- agentscumm:benchmark:{digest} -->"
+    cells[6] += f" {benchmark_marker(stats)}"
+    cells[10] += f" <!-- agentscumm:recorded-through:{completed.isoformat()} -->"
+    return cells
+
+
+def benchmark_row(cells):
     return "| " + " | ".join(cells) + " |\n"
 
 
-def upgrade_benchmark_table(text, stats=None):
+def row_cells(line, count):
+    cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", line.strip())[1:-1]]
+    require(len(cells) == count, "Invalid benchmark row")
+    return cells
+
+
+def upgrade_benchmark_table(text):
     """Upgrade the previous table without inventing missing archive measurements."""
     lines = text.splitlines(keepends=True)
     headers = [i for i, line in enumerate(lines) if line.strip() in (
         LEGACY_BENCHMARK_HEADER, PREVIOUS_BENCHMARK_HEADER, ANNOTATED_BENCHMARK_HEADER,
         SEPARATE_CACHE_BENCHMARK_HEADER, INLINE_CACHE_BENCHMARK_HEADER, PERCENTAGE_BENCHMARK_HEADER,
-        BENCHMARK_HEADER)]
+        FLAT_BENCHMARK_HEADER)]
     require(len(headers) <= 1, "Multiple benchmark comparison tables; resolve before registration")
     if headers and lines[headers[0]].strip() == PERCENTAGE_BENCHMARK_HEADER:
-        lines[headers[0]] = BENCHMARK_HEADER + "\n"
-    elif headers and lines[headers[0]].strip() != BENCHMARK_HEADER:
+        lines[headers[0]] = FLAT_BENCHMARK_HEADER + "\n"
+    elif headers and lines[headers[0]].strip() != FLAT_BENCHMARK_HEADER:
         position = headers[0]
         header = lines[position].strip()
         legacy = header == LEGACY_BENCHMARK_HEADER
         separator = {
             LEGACY_BENCHMARK_HEADER: LEGACY_BENCHMARK_SEPARATOR,
             SEPARATE_CACHE_BENCHMARK_HEADER: SEPARATE_CACHE_BENCHMARK_SEPARATOR,
-            INLINE_CACHE_BENCHMARK_HEADER: BENCHMARK_SEPARATOR,
+            INLINE_CACHE_BENCHMARK_HEADER: FLAT_BENCHMARK_SEPARATOR,
         }.get(header, PREVIOUS_BENCHMARK_SEPARATOR)
         require(position + 1 < len(lines) and lines[position + 1].strip() == separator,
                 "Invalid previous benchmark comparison table separator")
-        lines[position:position + 2] = [BENCHMARK_HEADER + "\n", BENCHMARK_SEPARATOR + "\n"]
+        lines[position:position + 2] = [FLAT_BENCHMARK_HEADER + "\n", FLAT_BENCHMARK_SEPARATOR + "\n"]
         position += 2
         while position < len(lines) and lines[position].lstrip().startswith("|"):
             cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", lines[position].strip())[1:-1]]
@@ -231,26 +298,96 @@ def upgrade_benchmark_table(text, stats=None):
                 del cells[11]
             lines[position] = "| " + " | ".join(cells) + " |\n"
             position += 1
-    if stats is not None:
-        marker = f"<!-- agentscumm:benchmark:{stats['trajectory']['sha256']} -->"
-        matching = [i for i, line in enumerate(lines) if marker in line]
-        require(len(matching) <= 1, "Duplicate benchmark identity; resolve before registration")
-        if matching:
-            position = matching[0]
-            cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", lines[position].strip())[1:-1]]
-            require(len(cells) == 12, "Invalid benchmark row")
-            if stats.get("verified_progress") and cells[0] != "✅":
-                cells[0] = public_text(benchmark_status(stats))
-            cells[9], cells[10], cells[2] = map(public_text, benchmark_usage(stats))
-            cells[6:8] = benchmark_actions(stats)
-            cells[7] += f" {marker}"
-            lines[position] = "| " + " | ".join(cells) + " |\n"
     text = "".join(lines)
     text = text.replace(PREVIOUS_RATE_NOTE, ARCHIVED_RATE_NOTE, 1)
     text = text.replace(PREVIOUS_BENCHMARK_PRICING_NOTES.strip(), BENCHMARK_PRICING_NOTES.strip(), 1)
     if BENCHMARK_PRICING_NOTES.strip() not in text:
         text = text.rstrip() + "\n\n" + BENCHMARK_PRICING_NOTES
     return text
+
+
+def benchmark_sort_key(row):
+    cutoff = BENCHMARK_TIME.search(row[10])
+    return cutoff[1] if cutoff else row[10]
+
+
+def game_table(title, game_id, rows):
+    return (f"## {title}\n<!-- agentscumm:game:{game_id} -->\n\n"
+            + BENCHMARK_HEADER + "\n" + BENCHMARK_SEPARATOR + "\n"
+            + "".join(map(benchmark_row, sorted(rows, key=benchmark_sort_key, reverse=True))))
+
+
+def read_table(lines, start, separator, columns):
+    require(start + 1 < len(lines) and lines[start + 1].strip() == separator,
+            "Invalid benchmark comparison table separator")
+    end = start + 2
+    while end < len(lines) and lines[end].lstrip().startswith("|"):
+        end += 1
+    return end, [row_cells(line, columns) for line in lines[start + 2:end]]
+
+
+def migrate_flat_table(text):
+    lines = text.splitlines(keepends=True)
+    for start, line in enumerate(lines):
+        if line.strip() == FLAT_BENCHMARK_HEADER:
+            end, rows = read_table(lines, start, FLAT_BENCHMARK_SEPARATOR, 12)
+            games = {}
+            for row in rows:
+                title = row.pop(1)
+                games.setdefault(title, []).append(row + ["Unknown", "Unknown"])
+            tables = []
+            for title, rows in games.items():
+                game_id = re.sub(r"[^a-z0-9]+", "-", html.unescape(title).lower()).strip("-")
+                tables.append(game_table(title, game_id, rows))
+            lines[start:end] = ["\n".join(tables)]
+            break
+    return "".join(lines)
+
+
+def update_benchmark(text, stats, title):
+    text = migrate_flat_table(upgrade_benchmark_table(text))
+    marker = benchmark_marker(stats)
+    matches = text.count(marker)
+    require(matches <= 1, "Duplicate benchmark identity; resolve before registration")
+    new_row = benchmark_cells(stats)
+    lines = text.splitlines(keepends=True)
+    game_id = stats["game_id"]
+    title = public_text(title or game_id.replace("-", " ").title())
+    require(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", game_id), "Invalid benchmark game ID")
+    last_table_end = None
+    for heading, line in enumerate(lines[:-1]):
+        section = GAME_SECTION.fullmatch(line + lines[heading + 1])
+        if not section:
+            continue
+        start = heading + 3
+        require(start < len(lines) and lines[start].strip() == BENCHMARK_HEADER,
+                "Missing game benchmark table")
+        end, rows = read_table(lines, start, BENCHMARK_SEPARATOR, len(new_row))
+        last_table_end = end
+        for row in rows:
+            if marker in row[6]:
+                if stats.get("verified_progress") and row[0] != "✅":
+                    row[0] = new_row[0]
+                for index in (1, 5, 6, 8, 9, 10):
+                    row[index] = new_row[index]
+                # Older manifests may omit provenance already verified from the trajectory.
+                for index in (11, 12):
+                    if row[index] == "Unknown" or new_row[12].startswith("Server · "):
+                        row[index] = new_row[index]
+                lines[heading:end] = [game_table(section[1], game_id, rows)]
+                return "".join(lines), False
+        if not matches and section[2] == game_id:
+            lines[heading:end] = [game_table(section[1], game_id, rows + [new_row])]
+            return "".join(lines), True
+
+    require(not matches, "Benchmark identity is outside a game table")
+    table = game_table(title, game_id, [new_row])
+    if last_table_end is None:
+        position = 1 if lines and lines[0].strip() == "# Benchmarks" else 0
+        lines[position:position] = ["\n", table] if position else [table, "\n"]
+    else:
+        lines[last_table_end:last_table_end] = ["\n", table]
+    return "".join(lines), True
 
 
 def register_benchmark(archive, *, repo=ROOT, title=None):
@@ -278,28 +415,7 @@ def register_benchmark(archive, *, repo=ROOT, title=None):
         require(not target.is_symlink(), "Linked benchmark file")
         original = target.read_bytes() if target.exists() else None
         text = original.decode() if original is not None else "# Benchmarks\n\n" + BENCHMARK_NOTES
-        text = upgrade_benchmark_table(text, stats)
-        marker = f"<!-- agentscumm:benchmark:{stats['trajectory']['sha256']} -->"
-        added = marker not in text
-        if added:
-            entry = benchmark_entry(stats, title)
-            lines = text.splitlines(keepends=True)
-            headers = [i for i, line in enumerate(lines) if line.strip() == BENCHMARK_HEADER]
-            if headers:
-                position = headers[0] + 1
-                require(position < len(lines) and lines[position].strip() == BENCHMARK_SEPARATOR,
-                        "Invalid benchmark comparison table separator")
-                position += 1
-                while position < len(lines) and lines[position].lstrip().startswith("|"):
-                    position += 1
-                if position and not lines[position - 1].endswith("\n"):
-                    lines[position - 1] += "\n"
-                lines.insert(position, entry)
-                text = "".join(lines)
-            else:
-                table = BENCHMARK_HEADER + "\n" + BENCHMARK_SEPARATOR + "\n" + entry + "\n"
-                anchor = "## Adding results"
-                text = text.replace(anchor, table + anchor, 1) if anchor in text else text.rstrip() + "\n\n" + table
+        text, added = update_benchmark(text, stats, title)
         if original is not None and text.encode() == original:
             return False
         require((target.read_bytes() if target.exists() else None) == original, "Benchmark file changed during registration; retry")

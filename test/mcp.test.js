@@ -6,6 +6,7 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import packageMetadata from '../package.json' with { type: 'json' };
 import { startFixture } from './fixture.js';
 
 test('opt-in telemetry queries unmapped games without leaking state into player tools', { timeout: 30000 }, async t => {
@@ -15,7 +16,8 @@ test('opt-in telemetry queries unmapped games without leaking state into player 
   t.after(async () => { await client.close(); await fixture.close(); await rm(dataDir, { recursive: true, force: true }); });
   await client.connect(new StdioClientTransport({ command: process.execPath,
     args: ['src/index.js', '--no-viewer', '--telemetry', '--base-url', fixture.url, '--data-dir', dataDir] }));
-  const tool = (await client.listTools()).tools.find(tool => tool.name === 'telemetry');
+  const tools = (await client.listTools()).tools;
+  const tool = tools.find(tool => tool.name === 'telemetry');
   assert.equal(tool.annotations.readOnlyHint, true);
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
   const read = async (name, args) => {
@@ -27,6 +29,8 @@ test('opt-in telemetry queries unmapped games without leaking state into player 
   assert.equal((await read('telemetry', { session_id })).state, 'pending');
   const status = await read('status', { wait_ms: 10000 });
   assert.equal(status.phase, 'ready');
+  assert.equal(status.sourceRevision.mcp_version, packageMetadata.version);
+  assert.deepEqual(status.sourceRevision.mcp_tools, tools.map(tool => tool.name).sort());
   assert.doesNotMatch(JSON.stringify(status), /room_id|game_identity|sample_time_ms/);
   const metadata = await read('telemetry', { session_id });
   assert.deepEqual(metadata, { session_id, game: 'unmapped', game_identity: { engine_id: 'fixture', game_id: 'unmapped' },
@@ -67,7 +71,11 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
   assert.deepEqual(names.sort(), ['act', 'library', 'list_games', 'observe', 'session', 'status']);
   for (const tool of tools) assert.equal(tool.annotations.readOnlyHint, ['list_games', 'observe', 'status'].includes(tool.name));
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
-  assert.equal(JSON.parse((await call('status')).content[0].text).phase, 'idle');
+  const idle = JSON.parse((await call('status')).content[0].text);
+  assert.equal(idle.phase, 'idle');
+  assert.equal(client.getServerVersion().version, packageMetadata.version);
+  assert.equal(idle.sourceRevision.mcp_version, packageMetadata.version);
+  assert.deepEqual(idle.sourceRevision.mcp_tools, names);
   assert.ok(JSON.parse((await call('list_games')).content[0].text).games.length > 0);
   assert.equal(JSON.parse((await call('library')).content[0].text).state, 'idle');
   assert.equal((await call('library', { operation: 'import' })).isError, true);

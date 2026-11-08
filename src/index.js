@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import metadata from '../package.json' with { type: 'json' };
 import { GameRuntime } from './runtime.js';
 import { actionSchema } from './actions.js';
 import { imageContent } from './history.js';
@@ -39,7 +40,8 @@ const evaluationLog = path.resolve(values['evaluation-log'] || path.join(runtime
 const resultFile = path.resolve(values['result-file'] || path.join(runtime.dataDir, 'result.json'));
 const reporter = evaluation ? await evaluationReporter(evaluationLog, resultFile) : undefined;
 
-const server = new McpServer({ name: 'agentscumm', version: '0.1.0' }, {
+const { name, version } = metadata;
+const server = new McpServer({ name, version }, {
   instructions: 'Start a ScummWEB game with session(operation="start"), poll status(wait_ms=10000) until phase=ready, then observe and act. '
     + 'Ready screenshots show only the game; dimensions can change with menus. Coordinates are screenshot-relative CSS pixels. Supply session_id and a unique request_id for each action sequence; '
     + 'reuse the same request_id only to retrieve the identical request result after an uncertain response. '
@@ -48,6 +50,7 @@ const server = new McpServer({ name: 'agentscumm', version: '0.1.0' }, {
 });
 
 const text = value => ({ type: 'text', text: JSON.stringify(value) });
+const registeredTools = [];
 function tool(name, description, inputSchema, callback, readOnly = false) {
   server.registerTool(name, { description, inputSchema,
     annotations: { readOnlyHint: readOnly, destructiveHint: false, openWorldHint: !readOnly } },
@@ -55,6 +58,7 @@ function tool(name, description, inputSchema, callback, readOnly = false) {
     try { return await callback(args, extra.signal); }
     catch (error) { return { isError: true, content: [text({ error: error.message, ...error.toolDetails, status: runtime.status() })] }; }
   });
+  registeredTools.push(name);
 }
 
 tool('list_games', 'List known ScummWEB game slugs. Launch also accepts future catalog slugs.', {},
@@ -130,6 +134,8 @@ tool('act', 'Execute up to 32 ordered input, wait or screenshot steps, including
     ...screenshots.flatMap(imageContent), ...(frame ? imageContent(frame) : []),
   ] };
 });
+
+Object.assign(runtime.sourceRevision, { mcp_version: version, mcp_tools: registeredTools.sort() });
 
 let shuttingDown = false;
 async function shutdown(exitCode = 0, terminal) {

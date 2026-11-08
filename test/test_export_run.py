@@ -521,6 +521,22 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(stats["git"]["agentscumm_runtime"], [])
         self.assertTrue(any("startup commit was not recorded" in s for s in stats["limitations"]))
 
+    def test_gameplay_revision_is_selected_by_attached_session(self):
+        rows = fixture()
+        stale = {"repository": "agentscumm", "commit_id": "a" * 40, "dirty": True}
+        played = {"repository": "agentscumm", "commit_id": "b" * 40, "dirty": False,
+                  "mcp_version": "0.2.0", "mcp_tools": ["act", "session", "status"]}
+        rows.insert(5, record("event_msg", {"type": "item_completed", "turn_id": "turn-1",
+            "item": {"type": "McpToolCall", "id": "stale-status", "server": "agentscumm", "tool": "status",
+                     "result": {"sourceRevision": stale, "sessionId": THREAD, "game": "synthetic-game",
+                                "dataDir": str(self.repo / "stale")}}}, 2))
+        rows[6]["payload"]["item"]["result"] = {"sourceRevision": played, "sessionId": SESSION,
+            "game": "synthetic-game", "dataDir": str(self.repo / "runtime")}
+        self.source(rows)
+        _, stats = self.export()
+        self.assertEqual(stats["git"]["agentscumm_runtime"], [stale, played])
+        self.assertEqual(stats["git"]["agentscumm_gameplay_runtime"], [played])
+
     def test_invalid_recorded_commit_fails_explicitly(self):
         rows = fixture()
         rows[0]["payload"]["git"] = {"commit_hash": "not-a-commit"}
