@@ -658,6 +658,58 @@ class ExportTests(unittest.TestCase):
         self.assertIn("Intermediate metadata was not recorded", (path / "trajectory.jsonl").read_text())
         self.assertEqual(EXPORT.verify_run(path), stats)
 
+    def test_helper_forwarded_images_recover_with_matching_call_and_frame_metadata(self):
+        other = base64.b64encode(b"another-full-image" * 15).decode()
+        frame = {"sessionId": SESSION, "game": "synthetic-game", "reason": "sequence-screenshot",
+                 "width": 1, "height": 1, "id": "frame-42", "mimeType": "image/png"}
+        last_frame = {**frame, "reason": "after-action", "id": "frame-43"}
+        content = [{"type": "text", "text": '{"selectedFrames":2}'}]
+        for metadata, data in ((frame, PNG), (last_frame, other)):
+            content.extend([{"type": "text", "text": EXPORT.dump(metadata)},
+                            {"type": "image", "mimeType": "image/png", "data": data}])
+        raw = json.dumps({"content": content})
+        lo, hi = raw.index(PNG) + 20, raw.index(other) + len(other) - 20
+        truncated = raw[:lo] + f"…{hi - lo} chars truncated…" + raw[hi:]
+
+        for case in ("helper", "yielded", "wrong-cell", "wrong-session", "competing-result"):
+            with self.subTest(case=case):
+                rows = fixture(complete=True)
+                native = rows[6]
+                native["payload"]["item"]["result"] = {"content": [{"type": "text", "text": truncated}]}
+                call = {"type": "custom_tool_call", "name": "exec", "call_id": "exec-call",
+                        "input": 'await eval(load("helper"))([])'}
+                segment = [record("response_item", call, 2)]
+                output_type, call_id = "custom_tool_call_output", "exec-call"
+                if case in ("yielded", "wrong-cell"):
+                    segment.append(record("response_item", {"type": output_type, "call_id": call_id,
+                        "output": "Script running with cell ID example:1\nWall time 1 second\n"}, 2))
+                    cell = "example:2" if case == "wrong-cell" else "example:1"
+                    segment.append(record("response_item", {"type": "function_call", "name": "wait",
+                        "call_id": "wait-call", "arguments": json.dumps({"cell_id": cell})}, 2))
+                    output_type, call_id = "function_call_output", "wait-call"
+                segment.append(native)
+                if case == "competing-result":
+                    segment.append(record("event_msg", {"type": "item_completed", "item": {
+                        "type": "McpToolCall", "server": "other", "tool": "capture",
+                        "result": {"content": [content[-1]]}}}, 3))
+                output = []
+                for metadata, data in ((frame, PNG), (last_frame, other)):
+                    if case == "wrong-session":
+                        metadata = {**metadata, "sessionId": "another-session"}
+                    output.extend([{"type": "input_text", "text": EXPORT.dump(metadata).split(',"id"')[0]},
+                                   {"type": "input_image", "image_url": "data:image/png;base64," + data}])
+                segment.append(record("response_item", {"type": output_type, "call_id": call_id, "output": output}, 4))
+                self.source(rows[:6] + segment + rows[8:])
+                if case in ("helper", "yielded"):
+                    path, stats = self.export(run_id=case, status="completed", completion_note="Ending shown")
+                    self.assertEqual(stats["screenshots"]["recovered_spanning_tool_summaries"], 1)
+                    self.assertEqual(stats["screenshots"]["model_visible_blocks"], 2)
+                    self.assertEqual(stats["screenshots"]["unresolved"], [])
+                    self.assertEqual(EXPORT.verify_run(path), stats)
+                else:
+                    with self.assertRaisesRegex(ValueError, "unavailable image"):
+                        self.export(run_id=case, status="completed", completion_note="Ending shown")
+
     def test_truncated_image_without_full_copy_is_explicit(self):
         rows = fixture(complete=True)
         partial = PNG[:20] + f"…{len(PNG) - 40} chars truncated…" + PNG[-20:]

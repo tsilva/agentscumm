@@ -38,6 +38,8 @@ ASSIGNED_CALL = re.compile(r"const\s+(\w+)\s*=\s*await\s+tools\.mcp__agentscumm_
 FORWARD_IMAGES = re.compile(
     r"for\s*\(\s*const\s+(\w+)\s+of\s+(\w+)\.content\s*\?\?\s*\[\]\s*\)"
     r"\s*(?:\{\s*)?if\s*\(\s*\1\.type\s*===\s*[\"']image[\"']\s*\)\s*image\s*\(\s*\1\s*\)")
+YIELDED_CELL = re.compile(r"^Script running with cell ID ([\w:-]+)\n")
+TOOL_OUTPUT_TYPES = {"custom_tool_call_output", "function_call_output"}
 SKILL_PATH = re.compile(r"(?<![\w/])((?:/|~/|\.{1,2}/)?[\w.@+-]+(?:/[\w.@+-]+)*/SKILL\.md)")
 QUOTED_SKILL_PATH = re.compile(r"[\"'`]((?:/|~/|\.{1,2}/|[\w.@+-]+/)[^\"'`\n]*?/SKILL\.md)[\"'`]")
 SKILL_NAME = re.compile(r"\$([a-z][a-z0-9_-]*(?::[a-z][a-z0-9_-]*)?)\b")
@@ -569,7 +571,7 @@ class Screenshots:
                     except ValueError:
                         return
                     walk(parsed)
-        pending = None
+        pending, yielded = None, {}
         for number, row in records(source):
             walk(row)
             payload = row.get("payload", {})
@@ -577,50 +579,103 @@ class Screenshots:
                 code = payload.get("input", "")
                 forwarded = {m[2] for m in FORWARD_IMAGES.finditer(code)}
                 calls = [(m[2], m[1] in forwarded) for m in ASSIGNED_CALL.finditer(code)]
-                pending = {"call_id": payload.get("call_id"), "calls": calls, "groups": []}
+                pending = {"call_id": payload.get("call_id"), "calls": calls, "groups": [],
+                           "exec": payload.get("name") in ("exec", "functions.exec"), "results": []}
+            elif row.get("type") == "response_item" and payload.get("type") == "function_call":
+                pending = None
+                if payload.get("name") in ("wait", "functions.wait"):
+                    try:
+                        arguments = json.loads(payload.get("arguments", ""))
+                    except ValueError:
+                        continue
+                    if isinstance(arguments, dict) and isinstance(arguments.get("cell_id"), str):
+                        pending = yielded.pop(arguments["cell_id"], None)
+                        if pending:
+                            pending["call_id"] = payload.get("call_id")
             elif row.get("type") == "event_msg" and pending:
                 item = payload.get("item", {})
-                if item.get("type") == "McpToolCall" and item.get("server") == "agentscumm":
+                if payload.get("type") != "item_completed" or item.get("type") != "McpToolCall":
+                    continue
+                images = list(self.native_images(item.get("result")))
+                if pending["exec"] and images:
+                    pending["results"].append((number, item, images))
+                if item.get("server") == "agentscumm":
                     selected = next((i for i, call in enumerate(pending["calls"]) if call[0] == item.get("tool")), None)
                     if selected is not None:
                         _, forwarded = pending["calls"].pop(selected)
                         if forwarded:
-                            images = list(self.native_images(row))
                             expected = self.selected_frames(item.get("result"))
                             if expected is None:
                                 expected = len(images)
                             pending["groups"].append((number, images, expected))
-            elif row.get("type") == "response_item" and payload.get("type") == "custom_tool_call_output" and pending:
-                if payload.get("call_id") == pending["call_id"]:
-                    blocks = payload.get("output", [])
-                    full = []
-                    if isinstance(blocks, list):
-                        for block in blocks:
-                            if isinstance(block, dict) and block.get("type") == "input_image":
-                                match = DATA_URL.fullmatch(block.get("image_url", ""))
-                                if match:
-                                    full.append((match[1], match[2]))
-                    groups = pending["groups"]
-                    # Only use ordering for an explicitly recognized direct forwarding
-                    # loop. Codex can truncate a JSON text block across several images,
-                    # leaving the first image's prefix joined to the last image's suffix.
-                    if groups and all(type(g[2]) is int for g in groups) and sum(g[2] for g in groups) == len(full):
-                        offset = 0
-                        for record_number, images, expected in groups:
-                            selected = full[offset:offset + expected]
-                            offset += expected
-                            if len(images) == expected and all(
-                                image.get("mimeType") == mime and self.fragment_matches(image["data"], encoded)
-                                for image, (mime, encoded) in zip(images, selected)):
-                                for i, (mime, encoded) in enumerate(selected):
-                                    self.ordered[(record_number, i)] = self.save(encoded, mime, reference=False)["id"]
-                            elif len(images) == 1 and expected > 1:
-                                fragment = TRUNCATED.fullmatch(images[0]["data"])
-                                if fragment and all(mime == images[0].get("mimeType") for mime, _ in selected) and \
-                                        selected[0][1].startswith(fragment[1]) and selected[-1][1].endswith(fragment[3]):
-                                    self.spanning[(record_number, 0)] = [self.save(encoded, mime, reference=False)["id"]
-                                                                       for mime, encoded in selected]
-                    pending = None
+            elif (row.get("type") == "response_item" and payload.get("type") in TOOL_OUTPUT_TYPES
+                  and pending and payload.get("call_id") == pending["call_id"]):
+                blocks = payload.get("output", [])
+                full, captions = [], []
+                header = blocks if isinstance(blocks, str) else ""
+                if isinstance(blocks, list):
+                    previous = None
+                    for block in blocks:
+                        if isinstance(block, dict) and block.get("type") == "input_image":
+                            url = block.get("image_url")
+                            match = DATA_URL.fullmatch(url) if isinstance(url, str) else None
+                            full.append((match[1], match[2]) if match else None)
+                            captions.append(previous)
+                        previous = block.get("text") if isinstance(block, dict) else None
+                    if blocks and isinstance(blocks[0], dict):
+                        header = blocks[0].get("text", "")
+                if full and all(full):
+                    groups = pending["groups"] or self.helper_forwarded_group(pending["results"], captions)
+                    self.recover_forwarded_groups(groups, full)
+                cell = YIELDED_CELL.match(header) if pending["exec"] and isinstance(header, str) else None
+                if cell:
+                    if full:
+                        pending["groups"].clear()
+                        pending["results"].clear()
+                    yielded[cell[1]] = pending
+                pending = None
+
+    def helper_forwarded_group(self, results, captions):
+        # A helper call may hide the forwarding loop from the outer JS source.
+        # Require one image-producing result and matching frame metadata beside
+        # every output image before treating its output order as evidence.
+        if len(results) != 1:
+            return []
+        number, item, images = results[0]
+        if item.get("server") != "agentscumm" or item.get("tool") not in ("act", "observe"):
+            return []
+        result = item["result"]
+        expected = self.selected_frames(result)
+        if expected != len(captions) or expected < 2:
+            return []
+        first = next((frame for obj in runtime_objects(result) if (frame := self.frame_metadata(obj))), None)
+        if not first or not first.get("sessionId") or not first.get("game"):
+            return []
+        prefix = dump({"sessionId": first["sessionId"], "game": first["game"]})[:-1] + ","
+        if (all(isinstance(caption, str) and caption.startswith(prefix) for caption in captions)
+                and dump(first).startswith(captions[0])):
+            return [(number, images, expected)]
+        return []
+
+    def recover_forwarded_groups(self, groups, full):
+        if not groups or sum(group[2] for group in groups) != len(full):
+            return
+        offset = 0
+        for record_number, images, expected in groups:
+            selected = full[offset:offset + expected]
+            offset += expected
+            if len(images) == expected and all(
+                image.get("mimeType") == mime and self.fragment_matches(image["data"], encoded)
+                for image, (mime, encoded) in zip(images, selected)):
+                for i, (mime, encoded) in enumerate(selected):
+                    self.ordered[(record_number, i)] = self.save(encoded, mime, reference=False)["id"]
+            elif len(images) == 1 and expected > 1:
+                # A single truncated data field can span several original images.
+                fragment = TRUNCATED.fullmatch(images[0]["data"])
+                if (fragment and all(mime == images[0].get("mimeType") for mime, _ in selected)
+                        and selected[0][1].startswith(fragment[1]) and selected[-1][1].endswith(fragment[3])):
+                    self.spanning[(record_number, 0)] = [self.save(encoded, mime, reference=False)["id"]
+                                                         for mime, encoded in selected]
 
     def recover(self, encoded, mime):
         match = TRUNCATED.fullmatch(encoded) if isinstance(encoded, str) else None
@@ -805,7 +860,7 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                                 if item.get("tool") == "act":
                                     sequence_lengths.append(len(args.get("actions", [])))
                                     actions.update(a["type"] for a in args.get("actions", []))
-                if record.get("type") == "response_item" and payload.get("type") == "custom_tool_call_output":
+                if record.get("type") == "response_item" and payload.get("type") in TOOL_OUTPUT_TYPES:
                     blocks = payload.get("output", [])
                     if isinstance(blocks, list):
                         model_images += sum(isinstance(b, dict) and b.get("type") == "input_image" for b in blocks)

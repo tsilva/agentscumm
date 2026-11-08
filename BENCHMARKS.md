@@ -4,6 +4,7 @@
 | --- | --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | ✅ | Flight of the Amazon Queen | $46.77 | gpt-6.1-sol / high | Yes | 16:51:19 | 8,530 | 950 <!-- agentscumm:benchmark:ea00d2f2c82e3fea5333a08d1bc4545f366f058d045dde0bc20aaf785bec2e81 --> | 234,994,829 | 234,782,913 (99.10%) | 211,916 | 2026-11-06 |
 | ✅ | Indiana Jones and the Last Crusade | $30.71 | gpt-6.1-sol / high | Yes | 07:28:13 | 2,769 | 547 <!-- agentscumm:benchmark:0004e66106b7c5f0aacb7614317897c1c8b529b183cdca196c41e5196f7d56b3 --> | 191,022,061 | 190,934,079 (99.35%) | 87,982 | 2026-11-07 |
+| ✅ | Beneath a Steel Sky | $26.61 | gpt-6.1-sol / high | Yes | 01:48:58 | 3,463 | 625 <!-- agentscumm:benchmark:34aa50b805ea0f59c91846fe484a2888454a1f18e40274f7a7cc1528b10016e1 --> | 159,426,734 | 159,365,731 (99.44%) | 61,003 | 2026-11-08 |
 
 ✅ marks a completed archive. Unfinished runs show the verified milestone count and latest milestone when available. Otherwise they show a declared estimate or Unknown. Time is elapsed conversation time (HH:MM:SS), including pauses and resumes, or elapsed so far for unfinished runs. Tokens include cached/repeated input plus output; actions count submitted inputs, including waits. Missing walkthrough declarations mean unspecified assistance, not unaided play.
 
