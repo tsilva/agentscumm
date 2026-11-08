@@ -1,15 +1,37 @@
 import { randomUUID } from 'node:crypto';
-import { stat, readFile, writeFile, rename, rm } from 'node:fs/promises';
+import { stat, opendir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
+
+const maxImportFiles = 256;
+const isGameZip = name => !name.startsWith('.') && /\.zip$/i.test(name);
+
+export async function findGameZips(directory) {
+  const root = path.resolve(directory);
+  const files = [];
+  const directories = [root];
+  while (directories.length) {
+    const folder = directories.pop();
+    for await (const entry of await opendir(folder)) {
+      if (entry.name.startsWith('.')) continue;
+      const file = path.join(folder, entry.name);
+      if (entry.isDirectory()) directories.push(file);
+      if (!entry.isFile() || !isGameZip(entry.name)) continue;
+      files.push(file);
+      if (files.length > maxImportFiles) throw new Error(`--import-games accepts up to ${maxImportFiles} ZIPs at a time`);
+    }
+  }
+  if (!files.length) throw new Error(`No game ZIPs found in ${root}. Put each game in a ZIP and try again.`);
+  return files.sort();
+}
 
 // Import through the site's file input: its normal scanner, duplicate matching,
 // library storage and error reporting remain authoritative. No ZIP extraction
 // or game detection is duplicated here.
 export async function validateZipPaths(paths) {
-  if (!Array.isArray(paths) || !paths.length || paths.length > 256) throw new Error('Provide 1–256 ZIP paths');
+  if (!Array.isArray(paths) || !paths.length || paths.length > maxImportFiles) throw new Error(`Provide 1–${maxImportFiles} ZIP paths`);
   const result = [...new Set(paths.map(file => path.resolve(file)))];
   for (const file of result) {
-    if (!/\.zip$/i.test(file) || path.basename(file).startsWith('.')) throw new Error(`Not a game ZIP: ${file}`);
+    if (!isGameZip(path.basename(file))) throw new Error(`Not a game ZIP: ${file}`);
     if (!(await stat(file)).isFile()) throw new Error(`Not a regular file: ${file}`);
   }
   return result;

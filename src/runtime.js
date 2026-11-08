@@ -316,9 +316,13 @@ export class GameRuntime {
     if (response && !response.ok()) throw new Error(`Game route returned HTTP ${response.status()}`);
     // ScummWEB's web-player controls are not part of the game or MCP input surface.
     await page.addStyleTag({ content: '.game-route-controls,.game-route-bottom-actions,.game-route-touch-cursor-pad-shell{display:none!important}' });
+    const failedOverlay = page.locator('[data-launch-overlay-state="error"] [data-launch-status]');
     let renderedSamples = 0, startupToken, filesReattached = false;
     while (performance.now() < deadline && this.sessionId === sessionId && !this.closing) {
       if (this.phase === 'disconnected' || this.phase === 'error') throw new Error(this.message);
+      if (await failedOverlay.isVisible()) {
+        throw new Error((await failedOverlay.textContent({ timeout: remaining() }))?.trim() || 'Game startup failed');
+      }
       const shell = page.frames().find(frame => frame !== page.mainFrame() && /\/scummvm\.html(?:[?#]|$)/.test(frame.url()));
       // All games start at their own route. An imported source without a
       // persistent file handle renders ScummWEB's reconnect/import UI there.

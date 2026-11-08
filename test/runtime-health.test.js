@@ -111,6 +111,14 @@ test('navigation and runtime startup share one deadline', { timeout: 15000 }, as
   assert.match(result.message, /timed out|Timeout/);
 });
 
+test('a failed download is reported even if the runtime iframe renders', { timeout: 15000 }, async t => {
+  const runtime = await setup(t);
+  await runtime.start({ game: 'failed-download' });
+  const result = await runtime.waitReady(10000);
+  assert.equal(result.phase, 'error');
+  assert.equal(result.message, 'Could not download the game ZIP');
+});
+
 test('a game iframe URL may appear before its document head is available', { timeout: 15000 }, async t => {
   const runtime = await setup(t, { documentDelay: 900 });
   await runtime.start();

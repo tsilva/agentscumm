@@ -1,11 +1,41 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, symlink, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { GameRuntime } from '../src/runtime.js';
-import { validateZipPaths } from '../src/library.js';
+import { findGameZips, validateZipPaths } from '../src/library.js';
 import { startFixture } from './fixture.js';
+
+test('the CLI bootstraps a new profile with game ZIPs from a directory tree', { timeout: 30000 }, async t => {
+  const folder = await mkdtemp(path.join(tmpdir(), 'agentscumm-library-cli-'));
+  const fixture = await startFixture({ library: true });
+  t.after(async () => { await fixture.close(); await rm(folder, { recursive: true, force: true }); });
+  const library = path.join(folder, 'Game Collection');
+  const empty = path.join(library, 'Empty');
+  const nested = path.join(library, 'Nested');
+  const profile = path.join(folder, 'instance');
+  const zip = path.join(nested, 'Imported Adventure.zip');
+  await mkdir(nested, { recursive: true });
+  await mkdir(empty);
+  await writeFile(zip, 'fixture game');
+  await writeFile(path.join(library, '.metadata.zip'), 'ignored');
+  await writeFile(path.join(empty, 'readme.txt'), 'ignored');
+  await symlink(nested, path.join(library, 'linked'));
+  await assert.rejects(findGameZips(empty), /No game ZIPs found/);
+
+  const { stdout } = await promisify(execFile)(process.execPath, [
+    'src/index.js', '--base-url', fixture.url, '--data-dir', profile, '--import-games', library, '--import-only',
+  ], { timeout: 25000 });
+  const result = JSON.parse(stdout);
+  assert.equal(result.state, 'completed', result.error);
+  assert.equal(result.file_count, 1);
+  assert.equal(result.games[0].slug, 'imported-adventure');
+  const saved = JSON.parse(await readFile(path.join(profile, 'local-library.json')));
+  assert.deepEqual(saved.paths, [zip]);
+});
 
 test('local ZIP import, site errors, instance persistence and imported game launch', { timeout: 60000 }, async t => {
   const folder = await mkdtemp(path.join(tmpdir(), 'agentscumm-library-'));

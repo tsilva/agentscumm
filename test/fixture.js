@@ -97,6 +97,7 @@ export async function startFixture({ navigationDelay = 0, startupDelay = 600, do
       setTimeout(() => response.end(`<!doctype html><html><style>body{margin:0}iframe{display:block;width:100vw;height:100vh;border:0}</style>
         <div class="game-route-controls" style="position:fixed;inset:0 0 auto;height:64px;background:magenta;z-index:10"><button>Exit game</button><button>Fullscreen</button></div>
         <div class="game-route-bottom-actions" style="position:fixed;bottom:0;z-index:10"><button>Skip intro</button></div>
+        ${request.url.includes('failed-download') ? '<div data-launch-overlay-state="error"><p data-launch-status>Could not download the game ZIP</p></div>' : ''}
         <iframe data-scummvm-route-frame="true" src="/scummvm.html?mode=${mode}${request.url.includes('identity-only') ? '&identityOnly' : ''}${query.get('telemetry') === '1' ? '&telemetry=1' : ''}"></iframe></html>`), navigationDelay);
     } else response.writeHead(404).end('Not found');
   });

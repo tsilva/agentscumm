@@ -9,10 +9,12 @@ import { imageContent } from './history.js';
 import path from 'node:path';
 import { RunEvaluation, evaluationReporter } from './evaluation.js';
 import { telemetryQuery } from './telemetry.js';
+import { findGameZips } from './library.js';
 
 const { values } = parseArgs({ options: {
   'no-viewer': { type: 'boolean', default: false },
   'base-url': { type: 'string' }, 'data-dir': { type: 'string' }, instance: { type: 'string' },
+  'import-games': { type: 'string' }, 'import-only': { type: 'boolean' },
   width: { type: 'string' }, height: { type: 'string' }, fps: { type: 'string' },
   'buffer-seconds': { type: 'string' },
   'run-id': { type: 'string' }, 'legacy-sky-slot': { type: 'string' },
@@ -20,6 +22,11 @@ const { values } = parseArgs({ options: {
   'result-file': { type: 'string' }, 'telemetry-ms': { type: 'string' }, telemetry: { type: 'boolean' },
 } });
 const evaluationEnabled = ['stop-condition', 'evaluation-log', 'result-file', 'telemetry-ms'].some(key => values[key] !== undefined);
+if (values['import-only'] && (values['import-games'] === undefined || evaluationEnabled)) {
+  throw new Error('--import-only requires --import-games DIR and cannot be used with evaluation options');
+}
+if (values['import-games'] === '') throw new Error('--import-games requires a directory');
+const startupZips = values['import-games'] === undefined ? undefined : await findGameZips(values['import-games']);
 const evaluation = evaluationEnabled ? new RunEvaluation({ condition: values['stop-condition'],
   intervalMs: values['telemetry-ms'] === undefined ? undefined : Number(values['telemetry-ms']) }) : undefined;
 const runtime = new GameRuntime({ viewer: !values['no-viewer'], baseUrl: values['base-url'],
@@ -157,5 +164,17 @@ evaluation?.once('terminal', result => {
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
   void shutdown().then(() => process.exit(evaluation ? 1 : 0)).catch(error => { console.error(error.message); process.exit(1); });
 });
-process.stdin.once('end', () => { void shutdown().catch(error => console.error(error.message)); });
-await server.connect(new StdioServerTransport());
+if (startupZips) await runtime.library({ operation: 'import', paths: startupZips });
+if (values['import-only']) {
+  try {
+    await runtime.libraryTask;
+    const result = await runtime.library();
+    console.log(JSON.stringify({ instanceId: runtime.instanceId, dataDir: runtime.dataDir, ...result }));
+    if (result.state === 'failed') process.exitCode = 1;
+  } finally {
+    await shutdown();
+  }
+} else {
+  process.stdin.once('end', () => { void shutdown().catch(error => console.error(error.message)); });
+  await server.connect(new StdioServerTransport());
+}

@@ -214,6 +214,19 @@ Flight of the Amazon Queen is the default game. The MCP provides the interface; 
 
 ## Import local games
 
+To bootstrap a Chromium profile at server startup, pass the directory containing
+your ScummVM game ZIPs:
+
+```sh
+node src/index.js --instance my-library --import-games "/path/to/ScummVM games"
+```
+
+The launcher finds up to 256 ZIPs recursively and skips hidden entries and nested
+symlinks. Package unpacked games as one ZIP per game. Poll `library(operation="status")`
+for the result before starting an imported game. For a one-shot import that prints
+a JSON report and exits, add `--import-only`, then launch the same instance again.
+The same command also accepts `--data-dir PATH` in place of `--instance`.
+
 Close the active game, then call `library(operation="import", paths=["/absolute/path/Game.zip", ...])`.
 Poll `library(operation="status")` until its state is `completed` or `failed`. Completion means the
 site finished scanning; inspect `summary` and `items` for individual errors and skipped bundled
@@ -373,5 +386,7 @@ CLI options:
 | `--buffer-seconds` | `60`; 1–300, still subject to the byte limit |
 | `--instance` | Omitted: generate an isolated instance; a name selects persistent `.agentscumm/instances/<name>/` storage |
 | `--data-dir` | Omitted: use `.agentscumm/instances/<generated-id>/`; an explicit path is used exactly, and cannot be combined with `--instance` |
+| `--import-games DIR` | Omitted: skip startup import; otherwise recursively import local game ZIPs into this profile |
+| `--import-only` | Omitted: keep the MCP server running; with `--import-games`, report results and exit |
 | `--base-url` | `https://scummweb.tsilva.eu`; override for a compatible development instance |
 | `--no-viewer` | Disable automatic spectator-window opening; its read-only URL remains available |
