@@ -31,50 +31,20 @@ suite with `node --test --test-concurrency=1 test/*.test.js`, then
 arrival timing of a real game; verify that through MCP against the pinned native
 provider before treating a new endpoint as a benchmark.
 
-## Game internals maps
+## Story progress integration
 
-Each game internals map names engine-specific rooms, variables, flags, and
-objects and defines milestone rules over that state. The evaluator loads
-`src/game-internals/<game-slug>.yaml` for the launched game. Use the
-[`agentscumm_game-internals-map-author` skill](../.agents/skills/agentscumm_game-internals-map-author/SKILL.md)
-to research and author maps.
+[ScummWEB owns the maps and story tracker](https://github.com/tsilva/scummweb/blob/main/docs/game-progress.md).
+AgentSCUMM discovers the map for the launched slug, feeds validated telemetry
+to ScummWEB's revision-checked tracker in the owned game frame, and records the
+result and map revision. AgentSCUMM keeps its private stop-condition evaluator;
+the progress receipt only includes samples through the matched stop.
 
-Define `schema_version: 1`, `game`, `engine_id`,
-and ordered `milestones` with unique IDs and display labels. In the optional
-`rooms` mapping, assign a native room ID to each room label, such as
-`ending-credits: 110`. Use `when: { room: ending-credits }` to reference it.
-Room rules also accept a numeric `room_id` and an optional `room_ready`
-condition. Three other optional mappings name native game state.
-
-- `variables` maps labels to `{ bank, index }`. Use
-  `{ variable: ending-outcome, one_of: [1, 3, 4] }` or compare with `equals`.
-- `flags` maps labels to `{ bank, index, mask }`, where the mask selects a
-  single bit. Use `{ flag: escaped-atlantis }` to match a set bit, or add
-  `equals: false` to match a clear bit.
-- `objects` maps labels to numeric object IDs. Use
-  `{ object: airlock-exit, equals: 1 }` to compare the object's state, or use
-  `one_of` to accept several states.
-
-The loader rejects undeclared labels. Rules also accept direct bank predicates,
-`all`, `any`, and references to earlier milestones. Edition-specific maps
-require the native game ID and index MD5. For `highest_stage` maps, the
-furthest verified milestone counts the earlier stages even when the player
-took a route that bypassed them.
-Maps with `telemetry: snapshot` evaluate the latest native snapshot and can
-bind a variable with `{ bank, key }` for a named telemetry bank entry. Use
-markers that persist in saves to retain credit when a player leaves a room.
-Cover each chapter as thoroughly as the native state allows. Trace named
-variables, flags, object states, and room IDs to the scripts that change them.
-Add a checkpoint for each distinct puzzle or story outcome the evidence
-supports. Check the starting values, intermediate values, and later writes
-before selecting a predicate. Combine equivalent outcomes for alternate
-routes into one stage.
-Verify rules against the target edition and test restores,
-alternate paths, and the live ending before adding a completion milestone.
-Mapped games record milestone changes in their private session logs for
-benchmark export. Progress tracking runs independently of stop conditions.
-Draft maps in `src/game-internals/drafts/` are research configs outside runtime
-scoring. They can describe predicates that still need provider or evaluator support.
+Use the [`agentscumm_game-internals-map-author` skill](../.agents/skills/agentscumm_game-internals-map-author/SKILL.md)
+for map research and verification in the sibling ScummWEB checkout. Run
+`node --test test/evaluation.test.js` to verify the integration, including older
+backends without the tracker.
+Deploy ScummWEB's tracker assets before updating AgentSCUMM if the deployment
+needs continuous progress reporting during the migration.
 
 ## Runtime and verification
 

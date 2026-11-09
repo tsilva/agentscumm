@@ -137,66 +137,18 @@ Use the pinned runtime and game data when interpreting slot numbers.
 
 ### Story progress
 
-Games with a [game internals map](development.md#game-internals-maps) record
-milestone changes in their private session log for [benchmark export](run-archives.md).
-Evaluator-enabled launches also include `progress` in private telemetry
-snapshots and result receipts.
+On a ScummWEB build that publishes a [map for the game and edition](https://github.com/tsilva/scummweb/blob/main/docs/game-progress.md#map-coverage),
+the spectator footer shows the story percentage and the next milestone.
+At 100%, it shows the percentage alone. The footer is outside game screenshots
+and MCP responses. Unmapped games and older builds keep ordinary play and
+explicit stop conditions available.
 
-| Game | Verified edition | Milestones |
-| --- | --- | ---: |
-| Flight of the Amazon Queen | English DOS talkie | 24 |
-| Indiana Jones and the Last Crusade | English Amiga | 20 |
-| Indiana Jones and the Fate of Atlantis | English DOS CD | 22 |
-| DreamWeb | English DOS CD | 15 |
-| Beneath a Steel Sky | English DOS CD | 28 |
-| Elvira II: The Jaws of Cerberus | English Amiga floppy | 7 |
-| King's Quest: Quest for the Crown | English DOS SCI remake 1.000.051 | 1 |
-| King's Quest II: Romancing the Throne | English Amiga 2.0J | 2 |
-| King's Quest III: To Heir Is Human | English Amiga 1.01 | 3 |
-| King's Quest IV: The Perils of Rosella | English Amiga SCI 1.023 | 2 |
-| King's Quest V: Absence Makes the Heart Go Yonder! | English Amiga 1.000.000 | 2 |
-| King's Quest VI: Heir Today, Gone Tomorrow | English DOS CD 1.000.00G | 2 |
-| King's Quest VII: The Princeless Bride | English DOS CD 2.00b | 2 |
-| Police Quest: In Pursuit of the Death Angel | English Amiga AGI 2.0B | 2 |
-| Police Quest: In Pursuit of the Death Angel | English DOS SCI remake 2.000 | 2 |
-| Police Quest 2: The Vengeance | English Amiga 1.024 | 2 |
-| Police Quest 3: The Kindred | English Amiga 1.000 | 2 |
-| Police Quest IV: Open Season | English DOS CD 1.100.000 | 2 |
-| Space Quest: The Sarien Encounter | English Amiga 1.2 | 3 |
-| Space Quest: The Sarien Encounter | English DOS SCI remake 2.000 | 2 |
-| Space Quest II: Chapter II - Vohaul's Revenge | English DOS 2.0F | 3 |
-| Space Quest III: The Pirates of Pestulon | English Amiga 1.0v | 2 |
-| Space Quest IV: Roger Wilco and the Time Rippers | English DOS CD 1.0 | 2 |
-| Space Quest V: The Next Mutation | English DOS 1.04 | 2 |
-| Space Quest 6: Roger Wilco in the Spinal Frontier | English DOS CD 1.0 | 2 |
+AgentSCUMM records milestone changes and the ScummWEB map revision in the
+private session log for [run export](run-archives.md). Evaluator-enabled
+launches also include progress in private telemetry and result receipts when
+available. A tracking error is recorded separately as `progress-error`.
 
-These maps count milestones up to the furthest confirmed stage, including when
-a route bypasses an earlier checkpoint. Fate of Atlantis uses the same scale
-for the Team, Wits, and Fists routes. Completion checks distinguish the
-winning endings from game-over scenes.
-
-Elvira II requires a ScummWEB build that reports the AGOS finale outcome
-and the full `gameamiga` database MD5. A ritual failure after using the lance
-keeps that checkpoint but does not count as a win.
-
-The Sierra maps cover major checkpoints and endings for the listed editions.
-They require a ScummWEB build that reports the AGI or SCI edition fingerprint.
-
-Progress includes the count, total, rounded percentage, and furthest milestone
-reached in map order. A restored save rebuilds the score from its current
-variables and room. Run archives retain the milestone total used during play.
-Each milestone counts once on that save timeline. When the runtime lacks the
-required variables, progress is reported as unavailable. This percentage counts
-story milestones and does not estimate time remaining.
-
-When progress is available, the spectator footer shows the percentage and the
-first milestone still to reach. At 100%, it shows the percentage alone. This
-summary appears in the spectator, outside game screenshots and MCP results.
-During normal play, the tracker can process a late telemetry read when it
-arrives. If a telemetry error stops tracking, the private session log records
-the reason in a `progress-error` entry.
-
-To watch progress without automatically stopping the game, supply
+To watch progress without stopping the game, supply
 `--evaluation-log /absolute/run/variables.jsonl` and omit `--stop-condition`.
 
 ```sh

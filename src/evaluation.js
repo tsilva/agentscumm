@@ -3,7 +3,6 @@ import { mkdir, open, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { z } from 'zod';
-import { loadGameProgress } from './progress.js';
 import { parseGameTelemetry } from './telemetry.js';
 
 const fields = { engine_id: z.string().min(1).max(80), room_id: z.number().int().min(0),
@@ -81,9 +80,9 @@ export class RunEvaluation extends EventEmitter {
     this.lastGameVariableTime = -Infinity;
   }
 
-  async beginSession(game) {
-    this.progressTracker = await loadGameProgress(game);
-    this.progress = undefined;
+  beginSession(provider) {
+    this.progressProvider = provider;
+    this.progress = this.nextMilestone = undefined;
     this.current = undefined;
     this.gameVariables = undefined;
     this.gameVariableEngine = undefined;
@@ -136,7 +135,7 @@ export class RunEvaluation extends EventEmitter {
     return { events, match };
   }
 
-  accept(payload) {
+  async accept(payload, updateProgress) {
     if (this.result) return;
     // Validate the whole read before accepting any of it. Partial malformed telemetry cannot win.
     const current = payload.current === null ? null : variablesSchema.parse(payload.current);
@@ -147,7 +146,7 @@ export class RunEvaluation extends EventEmitter {
       if (variables.native_time_ms < nativeTime) throw new Error('Evaluation native clock moved backwards');
       nativeTime = variables.native_time_ms;
     }
-    const progressTelemetry = this.progressTracker?.usesSnapshots
+    const progressTelemetry = this.progressProvider?.telemetry === 'snapshot'
       ? parseGameTelemetry(payload.progressTelemetry) : undefined;
     const identity = payload.identity ?? progressTelemetry?.identity;
     const engineId = payload.gameVariableEngine ?? current?.engine_id ?? identity?.engine_id;
@@ -163,13 +162,14 @@ export class RunEvaluation extends EventEmitter {
       candidates.find(sample => this.condition?.all.every(({ variable, equals }) => sample[variable] === equals));
     this.current = variables ?? latest ?? samples.at(-1);
     let progressChanged = false;
-    if (this.progressTracker) {
+    if (this.progressProvider) {
+      let input;
       const matchedWrite = game?.match?.game_variable_match;
       const stopTime = matchedWrite?.native_time_ms ?? variables?.native_time_ms ?? Infinity;
       if (progressTelemetry) {
         const { identity: snapshotIdentity, snapshot } = progressTelemetry;
         if (snapshot && snapshot.sample_time_ms <= stopTime) {
-          this.progressTracker.acceptSnapshot(snapshotIdentity, snapshot);
+          input = { identity: snapshotIdentity, snapshot };
         }
       } else {
         const events = game?.events ?? [];
@@ -178,11 +178,19 @@ export class RunEvaluation extends EventEmitter {
           samples.slice(0, matchedRoom + 1);
         const progressEvents = matchedWrite ? events.slice(0, events.indexOf(matchedWrite) + 1) :
           events.filter(event => event.native_time_ms <= stopTime);
-        this.progressTracker.accept(engineId, progressRooms, progressEvents, identity);
+        input = { engineId, rooms: progressRooms, events: progressEvents, identity };
       }
-      const progress = this.progressTracker.report();
-      progressChanged = JSON.stringify(progress) !== JSON.stringify(this.progress);
-      if (progressChanged) this.progress = progress;
+      const update = await updateProgress(input);
+      // The frame may have closed while its tracker was running.
+      if (update === null || this.result) return;
+      if (update) {
+        const progress = { ...update.report, map_revision: this.progressProvider.revision };
+        progressChanged = JSON.stringify(progress) !== JSON.stringify(this.progress);
+        if (progressChanged) this.progress = progress;
+        this.nextMilestone = update.nextMilestone;
+      } else {
+        this.progressProvider = this.progress = this.nextMilestone = undefined;
+      }
     }
     const progressReport = this.progress && { progress: this.progress };
     if (variables) {

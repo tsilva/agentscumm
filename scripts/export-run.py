@@ -234,6 +234,10 @@ def verify_run_progress(stats):
     require(isinstance(progress, dict) and progress.get("state") == "tracked"
             and progress.get("game") == stats["game_id"]
             and progress.get("session_id") in stats.get("sessions", []), "Invalid verified progress identity")
+    if "map_revision" in progress:
+        revision = progress["map_revision"]
+        require(isinstance(revision, str) and re.fullmatch(r"[a-f0-9]{64}", revision),
+                "Invalid verified progress map revision")
     when = USAGE.timestamp(progress["recorded_at"])
     require(USAGE.timestamp(stats["started_at"]) <= when <= USAGE.timestamp(stats["recorded_through"]),
             "Verified progress is outside the archive cutoff")

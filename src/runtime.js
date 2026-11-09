@@ -14,6 +14,7 @@ import { installDisplayObserver, displayBounds, captureBounds } from './display.
 import { claimDataDir } from './instances.js';
 import { readLibrary, validateZipPaths, importZipFiles, saveLibrary, launchReattachedGame } from './library.js';
 import { enableEvaluation, readEvaluation, RunEvaluation } from './evaluation.js';
+import { loadProgressProvider, readStoryProgress } from './progress.js';
 import { readGameTelemetry, telemetryReport } from './telemetry.js';
 import { installAudioControl } from './audio.js';
 
@@ -131,7 +132,7 @@ export class GameRuntime {
   get spectatorProgress() {
     const evaluation = this.sessionEvaluation;
     if (this.phase !== 'ready' || evaluation?.progress?.state !== 'tracked' || evaluation.result?.success === false) return;
-    return { percent: evaluation.progress.percent, nextMilestone: evaluation.progressTracker.nextMilestone };
+    return { percent: evaluation.progress.percent, nextMilestone: evaluation.nextMilestone };
   }
 
   async log(type, payload = {}) {
@@ -194,9 +195,7 @@ export class GameRuntime {
       if (this.phase === 'loading') throw new Error('A game is loading; wait for it or close the session first');
       if (this.page) await this.stopPage();
       this.importedGame = (await readLibrary(this.dataDir)).games.find(item => item.slug === game);
-      const evaluation = this.evaluation ?? new RunEvaluation();
-      await evaluation.beginSession(game);
-      this.sessionEvaluation = this.evaluation || evaluation.progressTracker ? evaluation : undefined;
+      this.sessionEvaluation = undefined;
       this.launchMode = mode;
       this.sessionId = randomUUID();
       this.runId = runId ?? this.defaultRunId ?? (mode === 'continue' ? undefined : randomUUID());
@@ -224,14 +223,11 @@ export class GameRuntime {
       const url = new URL(`/${game}/play`, this.baseUrl);
       if (this.saveScope) url.searchParams.set('agentSaveScope', this.saveScope);
       if (this.legacySkySlot !== undefined) url.searchParams.set('agentLegacySkySlot', this.legacySkySlot);
-      if (this.telemetryEnabled || evaluation.progressTracker?.usesSnapshots) url.searchParams.set('telemetry', '1');
+      if (this.telemetryEnabled) url.searchParams.set('telemetry', '1');
       if (mode === 'skip_intro' && catalogGame?.skipIntro) url.hash = 'seed=0';
       if (mode === 'continue') url.hash = 'continue';
       this.gameUrl = url.toString();
       this.expectedTarget = this.importedGame ? undefined : catalogGame?.target;
-      await this.log('launch', { game, mode, runId: this.runId, url: this.gameUrl, dimensions: this.dimensions,
-        instanceId: this.instanceId, dataDir: this.dataDir,
-        sourceRevision: this.sourceRevision });
       const sessionId = this.sessionId;
       // Launch asynchronously so MCP's tool timeout is independent of game downloads.
       this.bootTask = this.boot(sessionId).catch(async error => {
@@ -289,6 +285,25 @@ export class GameRuntime {
       return bounded(operation, probeBudget, probeBudget === budget
         ? `Game startup timed out at ${this.bootPhase}` : 'Game renderer did not respond during startup');
     };
+    const game = this.game;
+    let progressProvider, progressError;
+    try { progressProvider = await loadProgressProvider(this.baseUrl, game); }
+    catch (error) { progressError = error; }
+    if (this.sessionId !== sessionId || this.closing) return;
+    if (this.evaluation || progressProvider) {
+      this.sessionEvaluation = this.evaluation ?? new RunEvaluation();
+      this.sessionEvaluation.beginSession(progressProvider);
+    }
+    if (progressProvider?.telemetry === 'snapshot') {
+      const url = new URL(this.gameUrl);
+      url.searchParams.set('telemetry', '1');
+      this.gameUrl = url.href;
+    }
+    await this.log('launch', { game, mode: this.launchMode, runId: this.runId, url: this.gameUrl,
+      dimensions: this.dimensions, instanceId: this.instanceId, dataDir: this.dataDir,
+      sourceRevision: this.sourceRevision });
+    if (progressError) await this.log('progress-error', { message: progressError.message });
+    if (this.sessionId !== sessionId || this.closing) return;
     await this.ensureContext(remaining);
     if (this.sessionId !== sessionId || this.closing) return;
     for (const page of this.context.pages()) {
@@ -300,7 +315,9 @@ export class GameRuntime {
     await page.addInitScript(installAudioControl);
     await page.addInitScript(installHealthObserver);
     await page.addInitScript(installDisplayObserver);
-    if (this.sessionEvaluation) await page.addInitScript(enableEvaluation);
+    if (this.evaluation || progressProvider?.telemetry === 'events') {
+      await page.addInitScript(enableEvaluation);
+    }
     page.on('request', request => {
       const url = new URL(request.url());
       if (['http:', 'https:'].includes(url.protocol)) this.pendingRequests.set(request, { path: url.pathname, type: request.resourceType() });
@@ -764,12 +781,13 @@ export class GameRuntime {
   async pollEvaluation() {
     const evaluation = this.sessionEvaluation;
     if (!evaluation || evaluation.result || this.phase !== 'ready') return;
+    if (!this.evaluation && !evaluation.progressProvider) return;
     if (this.evaluationRead) return this.evaluationRead;
     const { shell, sessionId } = this;
     const isCurrent = () => this.shell === shell && this.sessionId === sessionId && this.phase === 'ready';
     this.evaluationRead = (async () => {
       try {
-        const read = shell.evaluate(readEvaluation, evaluation.progressTracker?.usesSnapshots);
+        const read = shell.evaluate(readEvaluation, evaluation.progressProvider?.telemetry === 'snapshot');
         // The read drains the engine's queues. During normal play, keep its result
         // even if it arrives late. An explicit trial still needs a bounded read.
         const payload = this.evaluation
@@ -784,7 +802,18 @@ export class GameRuntime {
         }
         if (hasTelemetry) {
           const previous = evaluation.progress;
-          evaluation.accept(payload);
+          await evaluation.accept(payload, async input => {
+            try {
+              const update = shell.evaluate(readStoryProgress, { provider: evaluation.progressProvider, input });
+              const result = await bounded(update, 2000, 'Evaluator could not read story progress');
+              return isCurrent() ? result : null;
+            } catch (error) {
+              if (!isCurrent()) return null;
+              await this.log('progress-error', { message: error.message }).catch(() => {});
+              if (!isCurrent()) return null;
+            }
+          });
+          if (!isCurrent()) return;
           if (evaluation.progress && evaluation.progress !== previous) {
             await this.log('progress', { progress: evaluation.progress });
           }
@@ -800,7 +829,8 @@ export class GameRuntime {
 
   scheduleEvaluation(sessionId) {
     const { sessionEvaluation: evaluation, shell } = this;
-    const isActive = () => !this.closing && this.sessionId === sessionId && this.shell === shell && !evaluation.result;
+    const isActive = () => !this.closing && this.sessionId === sessionId && this.shell === shell &&
+      !evaluation.result && Boolean(this.evaluation || evaluation.progressProvider);
     this.evaluationReadyAt = performance.now();
     const tick = async () => {
       if (!isActive()) return;

@@ -265,7 +265,7 @@ class FinalizationTests(unittest.TestCase):
             return {"timestamp": record("unused", {}, second)["timestamp"], "type": "progress",
                     "sessionId": session, "progress": {"game": game, "state": "tracked", "total": 7,
                         "completed": count, "percent": round(count * 100 / 7), "reached": ids[:count],
-                        "latest_milestone": label}}
+                        "latest_milestone": label, "map_revision": "a" * 64}}
 
         log = profile / "runs" / f"{SESSION}.jsonl"
         events = [{"type": "launch", **status}, sample(3, 6, "Cleared the last Valley of Mists obstacle"),
@@ -276,7 +276,9 @@ class FinalizationTests(unittest.TestCase):
 
         archive, stats = FINAL.EXPORT.export_run(self.rollout, game, repo=self.repo, status="stopped",
                                                  estimated_progress=85)
-        self.assertEqual(FINAL.EXPORT.verify_run(archive)["verified_progress"]["completed"], 2)
+        progress = FINAL.EXPORT.verify_run(archive)["verified_progress"]
+        self.assertEqual(progress["completed"], 2)
+        self.assertEqual(progress["map_revision"], "a" * 64)
         log.unlink()
         self.assertTrue(FINAL.register_benchmark(archive, repo=self.repo))
         benchmark = self.repo / "BENCHMARKS.md"

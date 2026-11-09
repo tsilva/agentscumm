@@ -51,6 +51,6 @@ Use [$agentscumm_price-thread](.agents/skills/agentscumm_price-thread/SKILL.md) 
 ## Author a game internals map
 
 Use [$agentscumm_game-internals-map-author](.agents/skills/agentscumm_game-internals-map-author/SKILL.md)
-when the user asks to add or expand a map under `src/game-internals/`.
-Trace native room IDs, variables, flags, and objects to the target edition and
-verify the milestone rules through the evaluator.
+when the user asks to author or verify a map in ScummWEB's `data/game-internals/`.
+Trace native state to the target edition and verify the milestone rules with
+ScummWEB's tracker and AgentSCUMM telemetry as appropriate.

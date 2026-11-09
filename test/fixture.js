@@ -1,9 +1,49 @@
 import http from 'node:http';
 
+export const fixtureMapRevision = 'a'.repeat(64);
+const fixtureMapGame = 'flight-of-the-amazon-queen';
+const fixtureTracker = `
+export function createTracker(game, revision) {
+  if (game !== ${JSON.stringify(fixtureMapGame)} || revision !== ${JSON.stringify(fixtureMapRevision)}) {
+    throw new Error('Wrong fixture game or map revision');
+  }
+  let completed = 0;
+  const ids = ['opened-door', 'left-room'];
+  const labels = ['Opened the door', 'Left the room'];
+  return {
+    accept(engine, rooms, events) {
+      if (engine !== 'queen') throw new Error('Wrong fixture engine');
+      for (const event of events) {
+        if (event.event === 'game_variables_baseline') completed = 0;
+        if (event.bank === 'game_state' && event.index === 3 && event.value === 1) completed = 1;
+      }
+      if (rooms.some(room => room.room_id === 110)) completed = 2;
+    },
+    report: () => ({ game, total: 2, state: 'tracked', completed, percent: completed * 50,
+      latest_milestone: labels[completed - 1] ?? null, reached: ids.slice(0, completed) }),
+    get nextMilestone() { return labels[completed] ?? null; },
+  };
+}
+`;
+
 export async function startFixture({ navigationDelay = 0, startupDelay = 600, documentDelay = 0, library = false, libraryContinue = false, evaluation = false, telemetry = false, nativeControls = false, archiveUpdates = 0, archiveComplete = false, archiveMountMs = 0 } = {}) {
   const requests = [];
   const server = http.createServer((request, response) => {
     requests.push(request.url);
+    if (evaluation === 'progress') {
+      if (request.url === '/game-progress/index.json') {
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify({ schema_version: 1, games: {
+          [fixtureMapGame]: { revision: fixtureMapRevision, telemetry: 'events' },
+        } }));
+        return;
+      }
+      if (request.url === `/game-progress/v1.mjs?v=${fixtureMapRevision}`) {
+        response.setHeader('Content-Type', 'text/javascript');
+        response.end(fixtureTracker);
+        return;
+      }
+    }
     response.setHeader('Content-Type', 'text/html');
     if (library && (request.url === '/' || /^\/[a-z0-9-]+\/play/.test(request.url))) {
       response.end(`<!doctype html><html><body>
