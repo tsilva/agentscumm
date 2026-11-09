@@ -311,6 +311,8 @@ Before play, the skill requires a clean checkout, synchronizes its current branc
 
 The gameplay skill interacts with games only through AgentSCUMM MCP tools, using the attached connection or the maintained local MCP client. Backend selection and implementation belong to the server; process and connection management support revision checks and recovery. A failed desktop connection alone is not a gameplay blocker when the local client works. Local run records and web research, including walkthroughs, remain available to support gameplay. Resume can restore only progress saved by the game.
 
+The [MCP preflight](../.agents/skills/agentscumm_play-game/SKILL.md#test-mcp-tools-before-play) checks the exposed tools and native controls in a disposable session. A failed check stops play and reports the failing operation. A pass restarts into the requested opening or saved run. A separate test profile protects live sessions with unsaved progress.
+
 Play Game captures startup context and automatically queues verified run export and a local benchmark entry after observing the ending. The finalizer waits for that gameplay turn to finish so its final reply and usage are included. Its `finalization.json` receipt distinguishes queued work, success and archival failures; see [automatic finalization](run-context.md#automatic-finalization).
 
 ## Price Thread skill
