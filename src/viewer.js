@@ -173,13 +173,18 @@ export class SpectatorViewer {
     return this.url;
   }
 
-  async close() {
+  async closeWindow() {
     await this.openTask?.catch(() => {});
     await this.native?.close();
     this.native = null;
     await this.context?.close();
+    this.context = null;
     this.browser = null;
     this.page = null;
+  }
+
+  async close() {
+    await this.closeWindow();
     if (this.server) await new Promise(resolve => this.server.close(resolve));
     this.server = null;
     this.startTask = null;

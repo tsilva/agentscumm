@@ -63,7 +63,7 @@ Select tools by purpose; use their current schemas for arguments and limits:
 | Tool | Use |
 | --- | --- |
 | `list_games` | Find the requested game's catalog slug. |
-| `session` | `operation: "start"` launches/reuses a game; `"open_viewer"` opens the spectator; `"close"` ends the session. Restart requires an explicit `restart: true` on start. |
+| `session` | `"start"` launches or reuses a game. `"open_viewer"` and `"close_viewer"` control the spectator. `"close"` ends the game session. Restart requires `restart: true` on start. |
 | `status` | Inspect readiness, health and server revision; `wait_ms` optionally waits while loading. |
 | `observe` | Default `source: "fresh"` captures now; `"history"` samples recent frames; `"frames"` retrieves exact `frame_ids`. Historical images are not current observations. |
 | `act` | Batch ordered inputs, waits and explicit `screenshot` steps. Inspect the returned images before choosing actions that depend on their contents. |
@@ -84,8 +84,10 @@ Continue toward the requested ending through ordinary failed actions and puzzle 
 
 ## Finish or hand off
 
-Confirm completion from the game's ending or equivalent explicit evidence, not from input-delivery status. Save a final screenshot and update memory with the actual result, current state, and resume details. Report whether the game was completed, any blocker or user-selected limit, and the run directory. Keep the spectator available unless the user requests closure. Never claim that creating this skill or launching the game completed a playthrough.
+Confirm completion from the game's ending or equivalent explicit evidence, such as the epilogue or credits. Save the ending screenshot in the working run, verify that the saved image is readable and shows the ending, and record its path, the outcome, and resume details in memory.
+
+Once the ending evidence is saved and verified, automatically call `session(operation="close_viewer", session_id=COMPLETED_SESSION_ID)` through the same MCP connection that played the run. Confirm that the returned status identifies the completed session and has `viewerOpen: false`. Honor an explicit request to keep the window open. On a pause, blocker, incomplete run, or failed evidence save, leave the spectator available. If closure fails, report it and continue finalization using the saved evidence. Preserve the game session and its history.
 
 After confirmed completion, automatically queue the repository's `scripts/finalize-run.py` helper using [the run-archiving procedure](references/run-archiving.md), this conversation's exact rollout/current turn, startup context and actual walkthrough URLs. Do this before the final gameplay reply, then finish the turn so the worker can capture its final response and usage. The worker exports and verifies all run metadata and assets, then updates local `BENCHMARKS.md` without duplicate results. This local bookkeeping is part of finishing a game; it does not authorize publishing or a Git push.
 
-Distinguish confirmed game completion from queued or completed archiving. Report the finalization state path and any archival blocker honestly. On interruption or a blocker, preserve memory and hand off; do not register a completed benchmark without ending evidence.
+Report the outcome, any blocker or user-selected limit, and the run directory. Distinguish game completion from queued or completed archiving, and report the finalization state path. On interruption or a blocker, preserve memory and hand off. Register a completed benchmark only with ending evidence.

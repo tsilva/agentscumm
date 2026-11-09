@@ -94,9 +94,17 @@ test('parallel games have separate native spectator processes and lifetimes', {
   assert.notEqual(statuses[0].viewerUrl, statuses[1].viewerUrl);
   let frames = 0;
   runtimes[1].viewer.server.on('request', request => { if (request.url.includes('/frame/')) frames++; });
-  await runtimes[0].close();
+  const firstViewer = runtimes[0].viewer.native.child;
+  const closed = await runtimes[0].closeViewer(statuses[0].sessionId);
+  assert.equal(closed.viewerOpen, false);
+  assert.ok(firstViewer.exitCode !== null || firstViewer.signalCode !== null);
+  assert.equal(closed.sessionId, statuses[0].sessionId);
+  assert.equal(closed.phase, 'ready');
+  assert.equal((await runtimes[0].observe()).phase, 'ready');
   for (let attempt = 0; attempt < 50 && frames < 2; attempt++) await sleep(100);
   assert.ok(frames >= 2, 'The surviving native spectator continues receiving frames');
   assert.equal(runtimes[1].viewer.native.isOpen, true);
   assert.equal((await runtimes[1].observe()).phase, 'ready');
+  await runtimes[0].openViewer();
+  assert.equal(runtimes[0].status().viewerOpen, true);
 });

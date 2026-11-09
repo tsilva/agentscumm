@@ -820,6 +820,22 @@ export class GameRuntime {
     await this.captureTask?.catch(() => {});
   }
 
+  async openViewer() {
+    return this.queue.run(() => {
+      if (this.closing) throw new Error('Runtime is shutting down');
+      return this.viewer.open();
+    });
+  }
+
+  async closeViewer(sessionId) {
+    return this.queue.run(async () => {
+      if (sessionId !== this.sessionId) throw new Error('Session ID does not match the current game');
+      if (this.phase === 'loading') throw new Error('Wait for game startup before closing the spectator');
+      await this.viewer.closeWindow();
+      return this.status();
+    });
+  }
+
   async closeGame() {
     return this.queue.run(async () => {
       this.phase = 'closed';

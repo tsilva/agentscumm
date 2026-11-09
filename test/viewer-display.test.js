@@ -101,4 +101,12 @@ test('screenshots and spectator share game-only geometry across resolutions, bla
     assert.equal(actual.width, expected.width); assert.equal(actual.height, expected.height);
     if (!scenario.black) assert.ok(actual.corner[1] > 150, 'The rendered crop starts with game pixels, not a black gutter');
   }
+  const viewerPage = runtime.viewer.page;
+  const { sessionId } = runtime;
+  assert.equal((await runtime.closeViewer(sessionId)).viewerOpen, false);
+  assert.equal(viewerPage.isClosed(), true);
+  assert.equal((await runtime.closeViewer(sessionId)).viewerOpen, false);
+  assert.equal((await runtime.observe()).sessionId, sessionId);
+  await runtime.viewer.open({ headless: true });
+  assert.equal(runtime.status().viewerOpen, true);
 });

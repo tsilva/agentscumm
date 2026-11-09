@@ -111,6 +111,14 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
   const review = await call('observe', { source: 'history', seconds: 10, count: 3 });
   assert.ok(review.content.some(item => item.type === 'image'));
   assert.equal((await call('observe', { source: 'frames', frame_ids: [frame.id] })).content[1].type, 'image');
+  assert.equal((await call('session', { operation: 'close_viewer' })).isError, true);
+  const closedViewer = await call('session', { operation: 'close_viewer', session_id: launch.sessionId });
+  assert.ok(!closedViewer.isError, closedViewer.content[0].text);
+  const viewerStatus = JSON.parse(closedViewer.content[0].text);
+  assert.equal(viewerStatus.viewerOpen, false);
+  assert.equal(viewerStatus.sessionId, launch.sessionId);
+  assert.equal(viewerStatus.phase, 'ready');
+  assert.equal((await call('observe', { source: 'frames', frame_ids: [frame.id] })).content[1].type, 'image');
   const capturesRequest = { session_id: launch.sessionId, request_id: 'hover-survey', after_ms: 0,
     actions: [{ type: 'move', x: 100, y: 100 }, { type: 'wait', milliseconds: 100 }, { type: 'screenshot' },
       { type: 'move', x: 200, y: 200 }, { type: 'screenshot' }] };
@@ -152,6 +160,9 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
   assert.equal(cancelled.state, 'failed'); assert.equal(cancelled.completed, 0);
   const replacement = JSON.parse((await call('session', { operation: 'start', game: 'abort-on-click-game', mode: 'beginning' })).content[0].text);
   assert.equal(JSON.parse((await call('status', { wait_ms: 10000 })).content[0].text).phase, 'ready');
+  const staleClose = await call('session', { operation: 'close_viewer', session_id: launch.sessionId });
+  assert.equal(staleClose.isError, true);
+  assert.match(JSON.parse(staleClose.content[0].text).error, /Session ID does not match/);
   const failingRequest = { session_id: replacement.sessionId, request_id: 'runtime-abort',
     actions: [{ type: 'screenshot' }, { type: 'click', x: 100, y: 100 }, { type: 'screenshot' }, { type: 'click', x: 200, y: 200 }] };
   const failed = await call('act', failingRequest);

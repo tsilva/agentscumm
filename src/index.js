@@ -72,19 +72,25 @@ tool('library', 'Import local game ZIPs through ScummWEB’s normal file importe
   return { content: [text(await runtime.library({ operation, paths }))] };
 });
 
-tool('session', 'Manage the owned game session: start returns immediately; close preserves saves and clears history; open_viewer opens the read-only spectator. Starting the active game reuses it unless restart=true. Poll status for readiness. Pass the same run_id with mode=continue to reopen its save scope in the same instance.', {
-  operation: z.enum(['start', 'close', 'open_viewer']),
+tool('session', 'Manage the owned game session: start returns immediately; close ends the game and clears history while preserving saves. open_viewer opens the read-only spectator. close_viewer requires the active session_id after startup and closes only the spectator. Starting the active game reuses it unless restart=true. Poll status for readiness. Pass the same run_id with mode=continue to reopen its save scope in the same instance.', {
+  operation: z.enum(['start', 'close', 'open_viewer', 'close_viewer']),
+  session_id: z.uuid().optional().describe('Required for close_viewer only; use the active game session ID.'),
   game: z.string().optional().describe('Start only; defaults to flight-of-the-amazon-queen.'),
   mode: z.enum(['skip_intro', 'beginning', 'continue']).optional().describe('Start only; defaults to skip_intro.'),
   restart: z.boolean().optional().describe('Start only; defaults to false.'),
   run_id: z.uuid().optional().describe('Start only; a new game gets a fresh run UUID by default.'),
-}, async ({ operation, ...args }) => {
+}, async ({ operation, session_id, ...args }) => {
   if (operation !== 'start' && Object.values(args).some(value => value !== undefined)) {
     throw new Error('game, mode, restart and run_id are valid only for session(operation="start")');
   }
+  if (operation === 'close_viewer') {
+    if (session_id === undefined) throw new Error('close_viewer requires session_id');
+    return { content: [text(await runtime.closeViewer(session_id))] };
+  }
+  if (session_id !== undefined) throw new Error('session_id is valid only for session(operation="close_viewer")');
   if (operation === 'start') return { content: [text(await runtime.start(args))] };
   if (operation === 'close') return { content: [text(await runtime.closeGame())] };
-  return { content: [text({ viewerUrl: await runtime.viewer.open() })] };
+  return { content: [text({ viewerUrl: await runtime.openViewer() })] };
 });
 
 tool('status', 'Check renderer/runtime health, startup progress, connection, history coverage, spectator and recent actions. nativeControls lists the available native actions or gives the reason they are unavailable. Optional wait_ms waits up to 25 seconds while loading. Ready means rendered startup content; inspect the screen for menus or intros.', {
