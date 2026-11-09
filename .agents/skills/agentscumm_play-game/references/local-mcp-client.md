@@ -25,9 +25,25 @@ These are sequential examples, not a startup batch: check `status.sourceRevision
 
 The client uses an isolated `browser/` profile inside the run directory, rather than the desktop-attached server's default profile. It does not automatically inherit that profile's saves or live progress. Preserve existing sessions and profiles; never copy an in-use profile or silently replace an ongoing run with a new game. Reuse the local client's live process when healthy. For new runs, the client writes `run-scope.json` once and reuses its ID with the browser profile on `--resume`. Older run directories keep the unscoped save recovery route. Start with `mode: "continue"` to recover the latest supported save. If `status.capabilities` includes `save` and `load`, those `act` steps accept integer native slots in this run's save scope.
 
+### Recover a save from the attached server
+
+Use this route when the attached connection has lost the original game instance and the run has a known native save. The new attached instance may report `idle` because it has a different data directory.
+
+1. Identify the original data directory from recorded MCP status or its recorded instance ID and the [instance storage rules](../../../../docs/usage.md#parallel-instances). Verify that the original server and its Chromium process have stopped and that no other process owns that directory. If ownership is uncertain, leave the profile alone and report the recovery blocker.
+2. In the same verified, ignored working run, copy the original data directory's `chromium-profile/` to a private `browser/chromium-profile/`. Check that the source profile and destination paths are free of linked directories. Keep the source intact. Use this copy only when the run has no existing `browser/` data or `run-scope.json`. Leave an existing local profile and scope intact and use its own resume route. For a scoped save, create `run-scope.json` with `{"runId":"RECORDED_RUN_ID"}` using the original game session's returned `runId`. Leave the scope file absent only for a verified legacy unscoped save.
+3. Start the local client with `--resume`. Match the original ScummWEB origin with `--base-url` if it differs from the default. Verify `status.sourceRevision`, then launch the same game in `continue` mode with the original `run_id` when scoped. Compare the restored room and inventory with the recorded checkpoint before further inputs. If the expected save is missing, preserve both profiles and investigate the recovery through MCP.
+
+Record the source instance, profile copy, save scope, restored checkpoint and new session in the run records. The copy holds save data needed for further resumes.
+
+### Recover a legacy Beneath a Steel Sky slot
+
 To bring a known manual slot from an older Beneath a Steel Sky run into its own save scope, add `--legacy-sky-slot N` to the client command with `--resume` and start in `continue` mode. Use the same profile and ScummWEB origin. A compatible ScummWEB build copies the slot and leaves the original intact. Verify the restored scene and native controls before play. Later resumes can omit this flag.
 
+### Connection lifecycle
+
 Record `local_mcp_client` as the connection route and retain the server's actual `sourceRevision` separately from checkout metadata. Do not describe this route as a repaired desktop connection. Keep the client alive while gameplay or the spectator is needed. Send `quit` only when intentionally ending that connection; closing the client terminates its owned game and viewer while preserving saved browser data. A failed client startup or tool call is a concrete error to investigate, not permission to bypass MCP or invent progress.
+
+### Evaluator endpoint
 
 For a user-requested evaluator endpoint, the client forwards `--stop-condition`
 (the JSON predicate), `--evaluation-log`, `--result-file`, and `--telemetry-ms` to

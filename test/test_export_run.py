@@ -692,9 +692,11 @@ class ExportTests(unittest.TestCase):
     def test_helper_forwarded_images_recover_with_matching_call_and_frame_metadata(self):
         other = base64.b64encode(b"another-full-image" * 15).decode()
         frame = {"sessionId": SESSION, "game": "synthetic-game", "reason": "sequence-screenshot",
-                 "width": 1, "height": 1, "id": "frame-42", "mimeType": "image/png"}
+                 "width": 1, "height": 1, "id": "frame-42", "mimeType": "image/png", "actionId": "action-1"}
         last_frame = {**frame, "reason": "after-action", "id": "frame-43"}
-        content = [{"type": "text", "text": '{"selectedFrames":2}'}]
+        receipt = {"selectedFrames": 2, "action": {"actionId": "action-1"},
+                   "screenshots": [{"step": 0, "frame_id": "frame-42"}, {"step": 1, "frame_id": "frame-43"}]}
+        content = [{"type": "text", "text": json.dumps(receipt)}]
         for metadata, data in ((frame, PNG), (last_frame, other)):
             content.extend([{"type": "text", "text": EXPORT.dump(metadata)},
                             {"type": "image", "mimeType": "image/png", "data": data}])
@@ -702,7 +704,8 @@ class ExportTests(unittest.TestCase):
         lo, hi = raw.index(PNG) + 20, raw.index(other) + len(other) - 20
         truncated = raw[:lo] + f"…{hi - lo} chars truncated…" + raw[hi:]
 
-        for case in ("helper", "yielded", "wrong-cell", "wrong-session", "competing-result"):
+        for case in ("helper", "yielded", "compact", "wrong-compact-id",
+                     "wrong-cell", "wrong-session", "competing-result"):
             with self.subTest(case=case):
                 rows = fixture(complete=True)
                 native = rows[6]
@@ -727,11 +730,17 @@ class ExportTests(unittest.TestCase):
                 for metadata, data in ((frame, PNG), (last_frame, other)):
                     if case == "wrong-session":
                         metadata = {**metadata, "sessionId": "another-session"}
-                    output.extend([{"type": "input_text", "text": EXPORT.dump(metadata).split(',"id"')[0]},
+                    caption = EXPORT.dump(metadata).split(',"id"')[0]
+                    if case in ("compact", "wrong-compact-id"):
+                        frame_id = metadata["id"]
+                        if case == "wrong-compact-id" and frame_id == "frame-43":
+                            frame_id = "frame-99"
+                        caption = EXPORT.dump({"frame": frame_id, "width": 1, "height": 1})
+                    output.extend([{"type": "input_text", "text": caption},
                                    {"type": "input_image", "image_url": "data:image/png;base64," + data}])
                 segment.append(record("response_item", {"type": output_type, "call_id": call_id, "output": output}, 4))
                 self.source(rows[:6] + segment + rows[8:])
-                if case in ("helper", "yielded"):
+                if case in ("helper", "yielded", "compact"):
                     path, stats = self.export(run_id=case, status="completed", completion_note="Ending shown")
                     self.assertEqual(stats["screenshots"]["recovered_spanning_tool_summaries"], 1)
                     self.assertEqual(stats["screenshots"]["model_visible_blocks"], 2)

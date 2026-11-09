@@ -706,7 +706,38 @@ class Screenshots:
         if (all(isinstance(caption, str) and caption.startswith(prefix) for caption in captions)
                 and dump(first).startswith(captions[0])):
             return [(number, images, expected)]
+        if item["tool"] == "act" and self.compact_act_captions(result, first, captions):
+            return [(number, images, expected)]
         return []
+
+    @staticmethod
+    def compact_act_captions(result, first, captions):
+        if not all(isinstance(caption, str) for caption in captions):
+            return False
+        try:
+            metadata = [json.loads(caption) for caption in captions]
+        except ValueError:
+            return False
+        if not all(isinstance(frame, dict) and set(frame) == {"frame", "width", "height"}
+                   and isinstance(frame["frame"], str) and frame["frame"]
+                   and all(type(frame[key]) is int and frame[key] > 0 for key in ("width", "height"))
+                   for frame in metadata):
+            return False
+        frame_ids = [frame["frame"] for frame in metadata]
+        if (len(set(frame_ids)) != len(frame_ids)
+                or metadata[0] != {"frame": first["id"], "width": first["width"], "height": first.get("height")}):
+            return False
+        # Explicit screenshots precede the optional final capture in an act response.
+        for obj in runtime_objects(result):
+            action, screenshots = obj.get("action"), obj.get("screenshots")
+            if (isinstance(action, dict) and first.get("actionId")
+                    and first["actionId"] == action.get("actionId")
+                    and obj.get("selectedFrames") == len(frame_ids) and isinstance(screenshots, list)
+                    and len(screenshots) in (len(frame_ids), len(frame_ids) - 1)
+                    and all(isinstance(shot, dict) and shot.get("frame_id") == identity
+                            for shot, identity in zip(screenshots, frame_ids))):
+                return True
+        return False
 
     def recover_forwarded_groups(self, groups, full):
         if not groups or sum(group[2] for group in groups) != len(full):
