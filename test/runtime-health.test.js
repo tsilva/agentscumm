@@ -111,6 +111,27 @@ test('navigation and runtime startup share one deadline', { timeout: 15000 }, as
   assert.match(result.message, /timed out|Timeout/);
 });
 
+test('archive bytes renew the startup deadline while the download progresses', { timeout: 15000 }, async t => {
+  const runtime = await setup(t, { archiveUpdates: 18, archiveComplete: true, startupDelay: 4100 },
+    { launchTimeoutMs: 2600, archiveLaunchTimeoutMs: 10000 });
+  await runtime.start();
+  const result = await runtime.waitReady(10000);
+  assert.equal(result.phase, 'ready', result.message);
+});
+
+test('stalled archive downloads and the overall launch cap still time out', { timeout: 20000 }, async t => {
+  const stalled = await setup(t, { archiveUpdates: 2, startupDelay: 10000 },
+    { launchTimeoutMs: 2600, archiveLaunchTimeoutMs: 10000 });
+  const capped = await setup(t, { archiveUpdates: 50, startupDelay: 10000 },
+    { launchTimeoutMs: 2600, archiveLaunchTimeoutMs: 3900 });
+  for (const runtime of [stalled, capped]) {
+    await runtime.start();
+    const result = await runtime.waitReady(7000);
+    assert.equal(result.phase, 'error');
+    assert.match(result.message, /Game startup timed out/);
+  }
+});
+
 test('a failed download is reported even if the runtime iframe renders', { timeout: 15000 }, async t => {
   const runtime = await setup(t);
   await runtime.start({ game: 'failed-download' });

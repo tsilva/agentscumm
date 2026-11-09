@@ -88,6 +88,7 @@ export class GameRuntime {
     this.viewer = new SpectatorViewer(this);
     this.viewerMode = options.viewer ?? true;
     this.launchTimeoutMs = options.launchTimeoutMs ?? 120000;
+    this.archiveLaunchTimeoutMs = options.archiveLaunchTimeoutMs ?? 900000;
     this.closing = false;
     this.shutdownSignal = new AbortController();
     this.evaluation = options.evaluation;
@@ -271,9 +272,11 @@ export class GameRuntime {
   }
 
   async boot(sessionId) {
-    // One monotonic budget covers browser startup, navigation and the runtime.
-    // Wall-clock jumps (including host sleep) must not expire a fresh launch.
-    const deadline = performance.now() + this.launchTimeoutMs;
+    // Only new archive bytes can extend startup, within a hard monotonic limit.
+    const started = performance.now();
+    const archiveDeadline = started + Math.max(this.launchTimeoutMs, this.archiveLaunchTimeoutMs);
+    let deadline = started + this.launchTimeoutMs;
+    let archiveBytes = 0;
     const remaining = () => {
       const value = deadline - performance.now();
       if (value <= 0) throw new Error(`Game startup timed out at ${this.bootPhase}`);
@@ -319,11 +322,18 @@ export class GameRuntime {
     // ScummWEB's web-player controls are not part of the game or MCP input surface.
     await page.addStyleTag({ content: '.game-route-controls,.game-route-bottom-actions,.game-route-touch-cursor-pad-shell{display:none!important}' });
     const failedOverlay = page.locator('[data-launch-overlay-state="error"] [data-launch-status]');
+    const archiveProgress = page.locator('[data-launch-overlay-state="visible"][data-launch-archive-bytes]');
     let renderedSamples = 0, startupToken, filesReattached = false;
     while (performance.now() < deadline && this.sessionId === sessionId && !this.closing) {
       if (this.phase === 'disconnected' || this.phase === 'error') throw new Error(this.message);
       if (await failedOverlay.isVisible()) {
         throw new Error((await failedOverlay.textContent({ timeout: remaining() }))?.trim() || 'Game startup failed');
+      }
+      const loadedBytes = await startupProbe(archiveProgress.evaluateAll(elements =>
+        Number(elements[0]?.getAttribute('data-launch-archive-bytes'))));
+      if (Number.isSafeInteger(loadedBytes) && loadedBytes > archiveBytes) {
+        archiveBytes = loadedBytes;
+        deadline = Math.min(archiveDeadline, performance.now() + this.launchTimeoutMs);
       }
       const shell = page.frames().find(frame => frame !== page.mainFrame() && /\/scummvm\.html(?:[?#]|$)/.test(frame.url()));
       // All games start at their own route. An imported source without a

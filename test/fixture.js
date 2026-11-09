@@ -1,6 +1,6 @@
 import http from 'node:http';
 
-export async function startFixture({ navigationDelay = 0, startupDelay = 600, documentDelay = 0, library = false, libraryContinue = false, evaluation = false, telemetry = false, nativeControls = false } = {}) {
+export async function startFixture({ navigationDelay = 0, startupDelay = 600, documentDelay = 0, library = false, libraryContinue = false, evaluation = false, telemetry = false, nativeControls = false, archiveUpdates = 0, archiveComplete = false } = {}) {
   const requests = [];
   const server = http.createServer((request, response) => {
     requests.push(request.url);
@@ -122,6 +122,18 @@ export async function startFixture({ navigationDelay = 0, startupDelay = 600, do
         <div class="game-route-controls" style="position:fixed;inset:0 0 auto;height:64px;background:magenta;z-index:10"><button>Exit game</button><button>Fullscreen</button></div>
         <div class="game-route-bottom-actions" style="position:fixed;bottom:0;z-index:10"><button>Skip intro</button></div>
         ${request.url.includes('failed-download') ? '<div data-launch-overlay-state="error"><p data-launch-status>Could not download the game ZIP</p></div>' : ''}
+        ${archiveUpdates ? `<div id="archive" data-launch-overlay-state="visible" data-launch-archive-bytes="0">Downloading game</div>
+        <script>
+          const archive = document.getElementById('archive');
+          let chunks = 0;
+          const transfer = setInterval(() => {
+            archive.dataset.launchArchiveBytes = ++chunks * 4096;
+            if (chunks === ${archiveUpdates}) {
+              clearInterval(transfer);
+              if (${archiveComplete}) archive.remove();
+            }
+          }, 200);
+        </script>` : ''}
         <iframe data-scummvm-route-frame="true" src="/scummvm.html?mode=${mode}${request.url.includes('identity-only') ? '&identityOnly' : ''}${query.get('telemetry') === '1' ? '&telemetry=1' : ''}${saveScope ? '&agentSaveScope=' + encodeURIComponent(saveScope) : ''}"></iframe></html>`), navigationDelay);
     } else response.writeHead(404).end('Not found');
   });
