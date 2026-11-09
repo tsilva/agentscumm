@@ -1,6 +1,6 @@
 import http from 'node:http';
 
-export async function startFixture({ navigationDelay = 0, startupDelay = 600, documentDelay = 0, library = false, libraryContinue = false, evaluation = false, telemetry = false, nativeControls = false, archiveUpdates = 0, archiveComplete = false } = {}) {
+export async function startFixture({ navigationDelay = 0, startupDelay = 600, documentDelay = 0, library = false, libraryContinue = false, evaluation = false, telemetry = false, nativeControls = false, archiveUpdates = 0, archiveComplete = false, archiveMountMs = 0 } = {}) {
   const requests = [];
   const server = http.createServer((request, response) => {
     requests.push(request.url);
@@ -102,6 +102,10 @@ export async function startFixture({ navigationDelay = 0, startupDelay = 600, do
         });
         ` : ''}
         const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
+        ${archiveMountMs ? `setTimeout(() => {
+          const mountedAt = performance.now() + ${archiveMountMs};
+          while (performance.now() < mountedAt) { /* Simulate synchronous archive mounting. */ }
+        }, 1000);` : ''}
         function paint(){ctx.fillStyle='#28523b';ctx.fillRect(0,0,320,240);ctx.fillStyle='#e9dc9b';ctx.font='18px sans-serif';ctx.fillText('Synthetic adventure',20,40);ctx.fillText('Inputs: '+events.length,20,90);ctx.fillRect((Date.now()/40)%260,160,20,20)}
         setInterval(paint,80);paint();
         for(const type of ['mousedown','mouseup','mousemove','keydown','keyup'])canvas.addEventListener(type,e=>{events.push({type,x:e.offsetX,y:e.offsetY,button:e.button,key:e.key});paint();${mode === 'abort-on-click' ? "if(type==='mousedown')globalThis.ABORT=true;" : ''}});

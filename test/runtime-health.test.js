@@ -119,6 +119,14 @@ test('archive bytes renew the startup deadline while the download progresses', {
   assert.equal(result.phase, 'ready', result.message);
 });
 
+test('mounting a downloaded archive can exceed the ordinary renderer probe', { timeout: 15000 }, async t => {
+  const runtime = await setup(t, { archiveUpdates: 8, archiveComplete: true, archiveMountMs: 3700, startupDelay: 5500 },
+    { launchTimeoutMs: 7000, archiveLaunchTimeoutMs: 14000 });
+  await runtime.start();
+  const result = await runtime.waitReady(12000);
+  assert.equal(result.phase, 'ready', result.message);
+});
+
 test('stalled archive downloads and the overall launch cap still time out', { timeout: 20000 }, async t => {
   const stalled = await setup(t, { archiveUpdates: 2, startupDelay: 10000 },
     { launchTimeoutMs: 2600, archiveLaunchTimeoutMs: 10000 });

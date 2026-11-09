@@ -284,7 +284,9 @@ export class GameRuntime {
     };
     const startupProbe = operation => {
       const budget = remaining();
-      return bounded(operation, Math.min(3000, budget), budget <= 3000
+      // The renderer can be busy mounting a downloaded archive.
+      const probeBudget = archiveBytes > 0 ? budget : Math.min(3000, budget);
+      return bounded(operation, probeBudget, probeBudget === budget
         ? `Game startup timed out at ${this.bootPhase}` : 'Game renderer did not respond during startup');
     };
     await this.ensureContext(remaining);
