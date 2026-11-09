@@ -1,0 +1,30 @@
+# English DOS SCI remake 2.000.
+# Script reference: https://github.com/sluicebox/sci-scripts/tree/870a8015b689474484bf3d8b41416956d4315432/sq1-dos-2.000/src
+# Room 71 branches on the self-destruct flag before entering the awards ceremony.
+schema_version: 1
+game: space-quest-the-sarien-encounter-sq1sci
+engine_id: sci
+edition:
+  game_id: sq1sci
+  index_md5: 1dd1b7c042f0c7345730a94633d283fe
+telemetry: snapshot
+scoring: highest_stage
+rooms:
+  xenon-awards: 68
+  credits: 2
+variables:
+  score: { bank: globals, index: 15 }
+  previous-room: { bank: globals, index: 12 }
+milestones:
+  - id: reached-xenon-awards
+    label: Reached the Xenon awards ceremony
+    when:
+      all:
+        - { room: xenon-awards }
+        - { variable: previous-room, equals: 71 }
+  - id: winning-ending
+    label: Completed the Xenon awards ending
+    when:
+      all:
+        - { room: credits }
+        - { variable: previous-room, equals: 68 }

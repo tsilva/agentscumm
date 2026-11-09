@@ -1,0 +1,33 @@
+# English Amiga 1.01.
+# Traced against the original AGI logic resources for this edition.
+# Logic 8 sets flag 227 after the cat transformation. Logic 74 uses states 26 and 27 for the ending messages.
+schema_version: 1
+game: king-s-quest-iii-to-heir-is-human
+engine_id: agi
+edition:
+  game_id: kq3
+  index_md5: 8ab343306df0e2d98f136be4e8cfd0ef
+telemetry: snapshot
+scoring: highest_stage
+rooms:
+  manannan-house: 8
+  daventry-throne-room: 74
+variables:
+  score: { bank: vars, index: 3 }
+  max-score: { bank: vars, index: 7 }
+  reunion-stage: { bank: vars, index: 220 }
+flags:
+  manannan-transformed: { bank: flag_bytes, index: 28, mask: 8 } # Flag 227.
+milestones:
+  - id: defeated-manannan
+    label: Transformed Manannan
+    when: { flag: manannan-transformed }
+  - id: returned-to-daventry
+    label: Reunited with the royal family
+    when: { room: daventry-throne-room }
+  - id: winning-ending
+    label: Reached the royal family’s ending
+    when:
+      all:
+        - { room: daventry-throne-room }
+        - { variable: reunion-stage, one_of: [26, 27] }

@@ -128,7 +128,7 @@ tool('observe', 'Read game images without input. fresh (default) captures now, i
     ...frames.flatMap(frame => imageContent({ ...frame, source }))] };
 }, true);
 
-tool('act', 'Execute up to 32 ordered input, wait or screenshot steps, including up to 8 screenshots and 20 seconds of input holds/waits. A compatible ScummWEB run can also pause, resume, wait_ticks (advance exact native updates and hold), save(id) and load(id) using run-local integer save slots. Check status.nativeControls. A batch containing an unsupported native step is rejected before input with code NATIVE_CONTROL_UNSUPPORTED. Steps stop on failure. Reuse request_id only with identical arguments to retrieve the cached result without repeating input (last 100 requests).', {
+tool('act', 'Execute up to 32 ordered steps, including up to 8 screenshots and 20 seconds of input holds/waits. Mix clicks, keys, waits and screenshots with native pause, resume (play), wait_ticks (advance the requested engine updates or runtime frames and hold), save(id) and load(id) steps in the same actions array. Prefer native steps for controls listed in status.nativeControls.actions. Save and load use run-local integer slots. A batch containing an unsupported native step is rejected before input with code NATIVE_CONTROL_UNSUPPORTED. Steps stop on failure. Reuse request_id only with identical arguments to retrieve the cached result without repeating input (last 100 requests).', {
   session_id: z.string().uuid(), request_id: z.string().min(1).max(100),
   frame_id: z.string().optional(), actions: z.array(actionSchema).min(1).max(32),
   after_ms: z.number().int().min(0).max(3000).default(200),

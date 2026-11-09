@@ -1,0 +1,27 @@
+# English Amiga 1.024.
+# Script reference: https://github.com/sluicebox/sci-scripts/tree/870a8015b689474484bf3d8b41416956d4315432/pq2-amiga-1.024/src
+# The successful rescue in room 133 is the only transition to the finale in room 91.
+schema_version: 1
+game: police-quest-2-the-vengeance
+engine_id: sci
+edition:
+  game_id: pq2
+  index_md5: 499de78ae72b7ce219f944c5e7ef0c5b
+telemetry: snapshot
+scoring: highest_stage
+rooms:
+  rescue-confrontation: 133
+  finale: 91
+variables:
+  score: { bank: globals, index: 15 }
+  previous-room: { bank: globals, index: 12 }
+milestones:
+  - id: reached-rescue
+    label: Reached the rescue confrontation
+    when: { room: rescue-confrontation }
+  - id: winning-ending
+    label: Rescued Marie and reached the finale
+    when:
+      all:
+        - { room: finale }
+        - { variable: previous-room, equals: 133 }

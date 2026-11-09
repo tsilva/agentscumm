@@ -1,6 +1,6 @@
 import http from 'node:http';
 
-export async function startFixture({ navigationDelay = 0, startupDelay = 600, documentDelay = 0, library = false, libraryContinue = false, evaluation = false, telemetry = false } = {}) {
+export async function startFixture({ navigationDelay = 0, startupDelay = 600, documentDelay = 0, library = false, libraryContinue = false, evaluation = false, telemetry = false, nativeControls = false } = {}) {
   const requests = [];
   const server = http.createServer((request, response) => {
     requests.push(request.url);
@@ -42,6 +42,29 @@ export async function startFixture({ navigationDelay = 0, startupDelay = 600, do
       const html = `<!doctype html><html><style>body{margin:0;background:black}canvas{display:block;width:100vw;height:100vh}</style>
         <div id="scummvm-cursor-grab-hint" style="position:fixed;inset:0;background:magenta;z-index:100">Click the game to grab the cursor.</div><div id="status">Loading fixture</div><canvas id="canvas" width="320" height="240" tabindex="0"></canvas><script>
         window.events=[];window.__scummwebReadyState={state:'pending',target:'queen'};
+        ${nativeControls ? `
+        const saveScope = new URL(location.href).searchParams.get('agentSaveScope');
+        const slots = new Map();
+        let tick = 0, paused = false, queuedInputs = 0;
+        document.addEventListener('mousedown', () => paused ? queuedInputs++ : tick++);
+        globalThis.scummwebAgentControls = {
+          status: () => ({version: 1, saveScope, tick, paused, ${nativeControls === 'frame' ? "maxSaveSlot: 0, tickSource: 'frame', actions: ['pause', 'resume', 'wait_ticks']" : 'maxSaveSlot: 8'}}),
+          run(operation, id) {
+            switch (operation) {
+              case 'pause': paused = true; break;
+              case 'wait_ticks': tick += id; paused = true; break;
+              case 'save': slots.set(id, tick); break;
+              case 'resume': paused = false; tick += queuedInputs; queuedInputs = 0; break;
+              case 'load':
+                if (!slots.has(id)) return {error: 'Missing fixture save'};
+                tick = slots.get(id);
+                break;
+              default: throw new Error('Unexpected fixture control: ' + operation);
+            }
+            return {tick, paused};
+          }
+        };
+        ` : ''}
         ${telemetry ? `
         const query = new URL(location.href).searchParams;
         if (query.get('telemetry') === '1') {
@@ -94,11 +117,12 @@ export async function startFixture({ navigationDelay = 0, startupDelay = 600, do
     } else if (/^\/[a-z0-9-]+\/play/.test(request.url)) {
       const mode = request.url.includes('broken') ? 'error' : request.url.includes('fallback') ? 'fallback' : request.url.includes('abort-on-click') ? 'abort-on-click' : 'normal';
       const query = new URL(request.url, 'http://fixture').searchParams;
+      const saveScope = nativeControls ? query.get('agentSaveScope') : null;
       setTimeout(() => response.end(`<!doctype html><html><style>body{margin:0}iframe{display:block;width:100vw;height:100vh;border:0}</style>
         <div class="game-route-controls" style="position:fixed;inset:0 0 auto;height:64px;background:magenta;z-index:10"><button>Exit game</button><button>Fullscreen</button></div>
         <div class="game-route-bottom-actions" style="position:fixed;bottom:0;z-index:10"><button>Skip intro</button></div>
         ${request.url.includes('failed-download') ? '<div data-launch-overlay-state="error"><p data-launch-status>Could not download the game ZIP</p></div>' : ''}
-        <iframe data-scummvm-route-frame="true" src="/scummvm.html?mode=${mode}${request.url.includes('identity-only') ? '&identityOnly' : ''}${query.get('telemetry') === '1' ? '&telemetry=1' : ''}"></iframe></html>`), navigationDelay);
+        <iframe data-scummvm-route-frame="true" src="/scummvm.html?mode=${mode}${request.url.includes('identity-only') ? '&identityOnly' : ''}${query.get('telemetry') === '1' ? '&telemetry=1' : ''}${saveScope ? '&agentSaveScope=' + encodeURIComponent(saveScope) : ''}"></iframe></html>`), navigationDelay);
     } else response.writeHead(404).end('Not found');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));

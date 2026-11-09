@@ -59,6 +59,83 @@ test('opt-in telemetry queries unmapped games without leaking state into player 
   assert.deepEqual(unavailable.banks, []);
 });
 
+test('stdio MCP batches native pause, save, resume and load with input and screenshots', { timeout: 30000 }, async t => {
+  const fixture = await startFixture({ nativeControls: true });
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-native-actions-'));
+  const client = new Client({ name: 'native-actions-test', version: '1.0' });
+  t.after(async () => { await client.close(); await fixture.close(); await rm(dataDir, { recursive: true, force: true }); });
+  await client.connect(new StdioClientTransport({ command: process.execPath,
+    args: ['src/index.js', '--no-viewer', '--base-url', fixture.url, '--data-dir', dataDir] }));
+  const call = (name, args = {}) => client.callTool({ name, arguments: args });
+  const read = async (name, args) => {
+    const result = await call(name, args);
+    assert.ok(!result.isError, result.content[0].text);
+    return JSON.parse(result.content[0].text);
+  };
+  const { sessionId: session_id } = await read('session', { operation: 'start' });
+  const ready = await read('status', { wait_ms: 10000 });
+  assert.equal(ready.phase, 'ready');
+  assert.deepEqual(ready.nativeControls, {
+    available: true, actions: ['pause', 'resume', 'wait_ticks', 'save', 'load'], tickSource: 'engine',
+  });
+  const actions = [
+    { type: 'pause' }, { type: 'save', id: 3 }, { type: 'resume' },
+    { type: 'click', x: 100, y: 100 }, { type: 'pause' }, { type: 'screenshot' },
+    { type: 'load', id: 3 }, { type: 'screenshot' }, { type: 'resume' },
+  ];
+  const args = { session_id, request_id: 'native-checkpoint-and-restore', actions, after_ms: 0 };
+  const result = await call('act', args);
+  assert.ok(!result.isError, result.content[0].text);
+  const { action, screenshots } = JSON.parse(result.content[0].text);
+  assert.equal(action.state, 'completed');
+  assert.equal(action.completed, actions.length);
+  assert.deepEqual(action.steps.map(step => step.type), actions.map(step => step.type));
+  assert.deepEqual(action.steps.map(step => step.control), [
+    { tick: 0, paused: true }, { tick: 0, paused: true }, { tick: 1, paused: false },
+    undefined, { tick: 1, paused: true }, undefined, { tick: 0, paused: true },
+    undefined, { tick: 0, paused: false },
+  ]);
+  assert.deepEqual(screenshots.map(frame => frame.step), [5, 7]);
+  assert.equal(result.content.filter(item => item.type === 'image').length, 3);
+  assert.equal((await read('act', args)).replayed, true);
+  assert.equal((await read('status')).actionSequences, 1);
+});
+
+test('stdio MCP steps timing-only engines and rejects unsupported saves before input', { timeout: 30000 }, async t => {
+  const fixture = await startFixture({ nativeControls: 'frame', telemetry: true });
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-frame-actions-'));
+  const client = new Client({ name: 'frame-actions-test', version: '1.0' });
+  t.after(async () => { await client.close(); await fixture.close(); await rm(dataDir, { recursive: true, force: true }); });
+  await client.connect(new StdioClientTransport({ command: process.execPath,
+    args: ['src/index.js', '--no-viewer', '--telemetry', '--base-url', fixture.url, '--data-dir', dataDir] }));
+  const call = (name, args = {}) => client.callTool({ name, arguments: args });
+  const read = result => JSON.parse(result.content[0].text);
+  const { sessionId: session_id } = read(await call('session', { operation: 'start' }));
+  const ready = read(await call('status', { wait_ms: 10000 }));
+  assert.equal(ready.phase, 'ready');
+  assert.deepEqual(ready.nativeControls, {
+    available: true, actions: ['pause', 'resume', 'wait_ticks'], tickSource: 'frame',
+  });
+
+  const rejected = await call('act', { session_id, request_id: 'unsupported', actions: [
+    { type: 'click', x: 50, y: 50 }, { type: 'save', id: 1 },
+  ] });
+  assert.equal(rejected.isError, true);
+  assert.equal(read(rejected).code, 'NATIVE_CONTROL_UNSUPPORTED');
+  assert.equal(read(rejected).control, 'save');
+  assert.equal(read(await call('telemetry', { session_id })).room.id, 17);
+
+  const stepped = await call('act', { session_id, request_id: 'step', after_ms: 0, actions: [
+    { type: 'pause' }, { type: 'wait_ticks', ticks: 3 }, { type: 'resume' },
+    { type: 'click', x: 50, y: 50 }, { type: 'pause' },
+  ] });
+  assert.ok(!stepped.isError, stepped.content[0].text);
+  assert.deepEqual(read(stepped).action.steps.map(step => step.control), [
+    { tick: 0, paused: true }, { tick: 3, paused: true }, { tick: 3, paused: false },
+    undefined, { tick: 4, paused: true },
+  ]);
+});
+
 test('stdio MCP returns actual images, sequence outcomes and history', { timeout: 40000 }, async t => {
   const fixture = await startFixture();
   const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-mcp-'));

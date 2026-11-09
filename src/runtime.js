@@ -100,7 +100,9 @@ export class GameRuntime {
   status() {
     const frame = this.phase === 'ready' ? this.history.latest() : null;
     const available = this.phase === 'ready' && Boolean(this.agentControls);
-    const nativeControls = available ? { available, actions: [...nativeActions] } : {
+    const nativeControls = available ? {
+      available, actions: this.agentControls.actions, tickSource: this.agentControls.tickSource,
+    } : {
       available, actions: [], reason: this.phase === 'ready' ? this.nativeControlReason ?? 'awaiting_probe' : 'game_not_ready',
     };
     return { phase: this.phase, sessionId: this.sessionId, runId: this.runId, game: this.game, url: this.gameUrl,
@@ -472,27 +474,36 @@ export class GameRuntime {
   }
 
   async probeNativeControls() {
-    if (this.phase !== 'ready' || this.agentControls) return;
+    if (this.phase !== 'ready' || this.currentActionId) return;
     if (!this.saveScope) {
       this.nativeControlReason = 'unscoped_run';
       return;
     }
     const { shell, sessionId, saveScope } = this;
-    let controls, reason;
+    let controls, actions, reason;
     try {
       controls = await bounded(shell.evaluate(() => globalThis.scummwebAgentControls?.status()),
         1000, 'Native control capability probe timed out');
       if (!controls) reason = 'runtime_bridge_missing';
       else if (controls.version !== 1 || controls.saveScope !== saveScope) reason = 'runtime_bridge_incompatible';
-      // The shell exists for every scoped game. An engine advertises support
-      // only after its native update loop has reached the control boundary.
-      else if (!Number.isInteger(controls.maxSaveSlot) || controls.maxSaveSlot < 1) reason = 'engine_not_advertised';
+      else {
+        // Older native bridges use a positive manual save limit to signal readiness.
+        actions = Array.isArray(controls.actions)
+          ? [...nativeActions].filter(action => controls.actions.includes(action))
+          : Number.isInteger(controls.maxSaveSlot) && controls.maxSaveSlot > 0 ? [...nativeActions] : [];
+        if (!actions.length) reason = 'engine_not_advertised';
+      }
     } catch {
       reason = 'bridge_probe_failed';
     }
-    if (this.shell !== shell || this.sessionId !== sessionId || this.phase !== 'ready' || this.agentControls) return;
+    if (this.shell !== shell || this.sessionId !== sessionId || this.phase !== 'ready' || this.currentActionId) return;
+    if (reason && this.agentControls) return;
     this.nativeControlReason = reason;
-    if (!reason) this.agentControls = { maxSaveSlot: controls.maxSaveSlot, paused: controls.paused, lastTick: controls.tick };
+    if (!reason) this.agentControls = {
+      actions, maxSaveSlot: controls.maxSaveSlot, paused: controls.paused, lastTick: controls.tick,
+      tickSource: controls.tickSource === 'frame' ? 'frame' : 'engine',
+      queueInputBeforeResume: controls.queueInputBeforeResume ?? controls.tickSource !== 'frame',
+    };
   }
 
   async checkHealth() {
@@ -555,10 +566,12 @@ export class GameRuntime {
         if (JSON.stringify(frame.captureBounds) !== JSON.stringify(box)) throw new Error('Game display geometry changed; observe again before issuing input');
       }
       const actions = validateSequence(rawActions, box.width, box.height);
-      const requestedControl = actions.find(action => nativeActions.has(action.type));
-      if (requestedControl) {
+      if (actions.some(action => nativeActions.has(action.type))) {
         await this.probeNativeControls();
-        if (!this.agentControls) throw unsupportedNativeControl(requestedControl.type, this.nativeControlReason ?? 'game_not_ready');
+        const unsupported = actions.find(action => nativeActions.has(action.type) &&
+          !this.agentControls?.actions.includes(action.type));
+        if (unsupported) throw unsupportedNativeControl(unsupported.type,
+          this.nativeControlReason ?? 'engine_not_advertised');
         await this.assertReady(sessionId);
       }
       for (const action of actions) {
@@ -591,7 +604,7 @@ export class GameRuntime {
           record.steps.push(step);
           const next = actions[index + 1];
           if (action.type === 'resume' && (next?.type === 'wait_ticks' ||
-            (this.agentControls.paused && next?.type === 'click'))) {
+            (this.agentControls.paused && this.agentControls.queueInputBeforeResume && next?.type === 'click'))) {
             // Keep the native gate closed until the tick budget or input is queued.
             deferredResume = step;
             step.state = 'deferred';
@@ -664,7 +677,8 @@ export class GameRuntime {
     const result = await bounded(this.shell.evaluate(({ action, saveScope, timeoutMs }) => {
       const controls = globalThis.scummwebAgentControls;
       const status = controls?.status();
-      if (status?.version !== 1 || status.saveScope !== saveScope || !status.maxSaveSlot) {
+      if (status?.version !== 1 || status.saveScope !== saveScope ||
+        !(Array.isArray(status.actions) ? status.actions.includes(action.type) : status.maxSaveSlot > 0)) {
         return { unsupported: true };
       }
       return controls.run(action.type, action.id ?? action.ticks, timeoutMs);

@@ -149,11 +149,38 @@ snapshots and result receipts.
 | Indiana Jones and the Fate of Atlantis | English DOS CD | 22 |
 | DreamWeb | English DOS CD | 15 |
 | Beneath a Steel Sky | English DOS CD | 28 |
+| Elvira II: The Jaws of Cerberus | English Amiga floppy | 7 |
+| King's Quest: Quest for the Crown | English DOS SCI remake 1.000.051 | 1 |
+| King's Quest II: Romancing the Throne | English Amiga 2.0J | 2 |
+| King's Quest III: To Heir Is Human | English Amiga 1.01 | 3 |
+| King's Quest IV: The Perils of Rosella | English Amiga SCI 1.023 | 2 |
+| King's Quest V: Absence Makes the Heart Go Yonder! | English Amiga 1.000.000 | 2 |
+| King's Quest VI: Heir Today, Gone Tomorrow | English DOS CD 1.000.00G | 2 |
+| King's Quest VII: The Princeless Bride | English DOS CD 2.00b | 2 |
+| Police Quest: In Pursuit of the Death Angel | English Amiga AGI 2.0B | 2 |
+| Police Quest: In Pursuit of the Death Angel | English DOS SCI remake 2.000 | 2 |
+| Police Quest 2: The Vengeance | English Amiga 1.024 | 2 |
+| Police Quest 3: The Kindred | English Amiga 1.000 | 2 |
+| Police Quest IV: Open Season | English DOS CD 1.100.000 | 2 |
+| Space Quest: The Sarien Encounter | English Amiga 1.2 | 3 |
+| Space Quest: The Sarien Encounter | English DOS SCI remake 2.000 | 2 |
+| Space Quest II: Chapter II - Vohaul's Revenge | English DOS 2.0F | 3 |
+| Space Quest III: The Pirates of Pestulon | English Amiga 1.0v | 2 |
+| Space Quest IV: Roger Wilco and the Time Rippers | English DOS CD 1.0 | 2 |
+| Space Quest V: The Next Mutation | English DOS 1.04 | 2 |
+| Space Quest 6: Roger Wilco in the Spinal Frontier | English DOS CD 1.0 | 2 |
 
 These maps count milestones up to the furthest confirmed stage, including when
 a route bypasses an earlier checkpoint. Fate of Atlantis uses the same scale
 for the Team, Wits, and Fists routes. Completion checks distinguish the
 winning endings from game-over scenes.
+
+Elvira II requires a ScummWEB build that reports the AGOS finale outcome
+and the full `gameamiga` database MD5. A ritual failure after using the lance
+keeps that checkpoint but does not count as a win.
+
+The Sierra maps cover major checkpoints and endings for the listed editions.
+They require a ScummWEB build that reports the AGI or SCI edition fingerprint.
 
 Progress includes the count, total, rounded percentage, and furthest milestone
 reached in map order. A restored save rebuilds the score from its current
@@ -334,7 +361,7 @@ Supported actions:
   target before release for `hold_ms` each. Both holds count toward the 20-second budget.
 - `wait`: `milliseconds` (0–10000).
 - `pause` and `resume`: explicitly hold or release native game updates. Repeating either is safe.
-- `wait_ticks`: `ticks` (1–120). Advance that many native updates and hold at the resulting frame.
+- `wait_ticks`: `ticks` (1–120). Advance that many engine updates or runtime frame presentations, then hold.
 - `save` and `load`: integer `id` (1 through `status.agentControls.maxSaveSlot`), a native save slot in the current run.
 - `screenshot`: no additional fields; captures at this exact position in the sequence without issuing input.
 
@@ -348,15 +375,17 @@ Results distinguish captured screenshots, delivered inputs and uncertain deliver
 
 ### Native game time and saves
 
-Native actions work in **Beneath a Steel Sky** (Sky) and the full **Flight of the Amazon Queen** (Queen) on a compatible ScummWEB build. For any game, `status.nativeControls` reports `available` and the supported `actions`. When unavailable it returns an empty list and a reason, such as `engine_not_advertised`, `runtime_bridge_missing`, or `unscoped_run`. The engine can advertise controls after the first game frame, so status checks again until the controls become available.
+On a compatible ScummWEB build, `status.nativeControls` reports `available`, the supported `actions`, and `tickSource`. A game that services controls at its update boundary reports `engine`. The shared runtime reports `frame` and steps through ScummVM frame presentations. Both clocks are independent of AgentSCUMM screenshot FPS. When no controls are available, status returns an empty list and a reason, such as `engine_not_advertised`, `runtime_bridge_missing`, or `unscoped_run`. Status rechecks for controls until the engine starts advertising them.
 
-If a batch requests an unavailable native action, `act` rejects the whole batch before sending input. The MCP error includes `code: "NATIVE_CONTROL_UNSUPPORTED"`, the requested `control`, and the `reason`. Ordinary input and screenshots remain available. Each successful native step reports its confirmed `tick` and `paused` state. A tick is one engine update, independent of screenshot FPS. Queen counts rendered updates, including walks and cutaways. Native requests share a 20-second batch window. `wait_ticks` can use the remaining window, and other native operations have a 10-second limit.
+If a batch requests an unavailable native action, `act` rejects the whole batch before sending input. The MCP error includes `code: "NATIVE_CONTROL_UNSUPPORTED"`, the requested `control`, and the `reason`. Ordinary input and screenshots remain available. Each successful native step reports its confirmed `tick` and `paused` state. Native requests share a 20-second batch window. `wait_ticks` can use the remaining window, and other native operations have a 10-second limit.
 
-Use `pause → screenshot` to inspect a stable scene, then `wait_ticks → screenshot` to step forward. In `resume → wait_ticks → pause`, the server hands the tick budget to the engine before releasing it, so the batch advances exactly the requested ticks. An immediately following click in `resume → click` is queued before releasing a paused engine. `wait` and `after_ms` still measure wall-clock time.
+Use `pause → screenshot` to inspect a stable scene, then `wait_ticks → screenshot` to step forward. In `resume → wait_ticks → pause`, the server hands the tick budget to the engine before releasing it, so the batch advances exactly the requested ticks. Sky and Queen queue the click in `resume → click` before releasing the paused engine. Other engines resume first so they can observe the button press. `wait` and `after_ms` still measure wall-clock time.
 
-`save` and `load` use ScummVM's normal save format and obey the engine's restrictions on the current scene. Queen exposes slots 1–98 and requires a boundary between commands and room transitions. Saving to an existing ID replaces that slot in the run. Loading a missing ID fails and stops the batch. A paused load stays paused and renders the restored scene. Observe again before choosing actions based on the restored state.
+Use supported native controls in the same `act.actions` array as ordinary input. For example, `pause → save → resume → click` checkpoints before a planned click. `pause → load → screenshot` lets you inspect a restored scene before resuming play with `resume`. Check `status.nativeControls.actions` for the current run before choosing a control.
 
-Fresh game launches get a new `runId` by default. Native saves are scoped to that run, game and owned browser profile. To reopen them after closing a session or restarting the server, use the same browser data directory and call `session(operation="start", mode="continue", run_id=...)` with the returned run ID. This loads the latest native save, after which `load` can select a different slot. The local Play Game client retains its run ID across `--resume`. An unscoped `continue` with no configured run ID remains available for existing browser saves.
+`save` and `load` are advertised separately and use ScummVM's normal save format. The engine can reject either action in the current scene, such as an intro or menu. Queen exposes slots 1–98 and requires a boundary between commands and room transitions. Saving to an existing manual ID replaces that slot in the run. Loading a missing ID fails and stops the batch. A paused load stays paused and allows a new frame before holding. Observe again before choosing actions based on the restored state.
+
+Fresh game launches get a new `runId` by default. Native saves are scoped to that run, game and owned browser profile. To reopen a save after closing a session or restarting the server, use the same browser data directory and supply the original `run_id` on launch. If ScummWEB supports Continue for the edition, `mode="continue"` opens its latest native save. You can also open the game with `mode="beginning"` and use `load` when the engine allows it. The local Play Game client retains its run ID across `--resume`. An unscoped `continue` with no configured run ID remains available for existing browser saves.
 
 ### Visual history and spectator
 

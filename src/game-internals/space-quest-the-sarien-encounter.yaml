@@ -1,0 +1,28 @@
+# English Amiga 1.2.
+# Traced against the original AGI logic resources for this edition.
+# Logic 64 begins the victory ceremony whether or not Roger kept the data cartridge.
+schema_version: 1
+game: space-quest-the-sarien-encounter
+engine_id: agi
+edition:
+  game_id: sq1
+  index_md5: 0b216d931e95750f1f4837d6a4b821e5
+telemetry: snapshot
+scoring: highest_stage
+rooms:
+  kerona-crash-site: 12
+  deltaur-approach: 43
+  xenon-awards: 64
+variables:
+  score: { bank: vars, index: 3 }
+  max-score: { bank: vars, index: 7 }
+milestones:
+  - id: reached-kerona
+    label: Reached Kerona
+    when: { room: kerona-crash-site }
+  - id: reached-deltaur
+    label: Reached the Deltaur
+    when: { room: deltaur-approach }
+  - id: winning-ending
+    label: Reached the Xenon awards ceremony
+    when: { room: xenon-awards }

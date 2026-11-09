@@ -1,0 +1,29 @@
+# English Amiga 2.0J.
+# Traced against the original AGI logic resources for this edition.
+# Logic 107 sets flag 34 after the monk completes the wedding.
+schema_version: 1
+game: king-s-quest-ii-romancing-the-throne
+engine_id: agi
+edition:
+  game_id: kq2
+  index_md5: b866f0fab2fad91433a637a828cfa410
+telemetry: snapshot
+scoring: highest_stage
+rooms:
+  neptune-palace: 51
+  wedding: 107
+variables:
+  score: { bank: vars, index: 3 }
+  max-score: { bank: vars, index: 7 }
+flags:
+  wedding-completed: { bank: flag_bytes, index: 4, mask: 4 } # Flag 34.
+milestones:
+  - id: reached-neptune
+    label: Reached Neptune’s palace
+    when: { room: neptune-palace }
+  - id: winning-ending
+    label: Married Valanice
+    when:
+      all:
+        - { room: wedding }
+        - { flag: wedding-completed }

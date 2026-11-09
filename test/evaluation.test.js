@@ -246,6 +246,87 @@ test('DreamWeb scores keyed snapshots and rebuilds progress after a restore', as
   assert.equal(evaluation.progress.completed, 0);
 });
 
+test('Elvira II scores the winning branch separately from a late ritual failure', async () => {
+  const evaluation = new RunEvaluation();
+  await evaluation.beginSession('elvira-ii-the-jaws-of-cerberus');
+  const identity = { engine_id: 'agos', game_id: 'elvira2', index_md5: 'a144d2467e1addee1f705647dacd33df' };
+  let sampleTime = 0;
+  const accept = (studios, stage, outcome, detected = identity) => {
+    const vars = Array(255).fill(0);
+    vars[180] = studios;
+    vars[186] = stage;
+    const banks = outcome === undefined ? { vars } : { vars, elvira2_outcome: { ritual: outcome } };
+    evaluation.accept({ current: null, events: [],
+      progressTelemetry: { identity: detected, snapshot: { schema_version: 1, room_id: null,
+        sample_time_ms: ++sampleTime, banks } } });
+    return evaluation.progress;
+  };
+
+  assert.equal(accept(0, 0, 0).completed, 0);
+  assert.equal(accept(1, 0, 0).completed, 1);
+  assert.equal(accept(2, 0, 0).completed, 2);
+  assert.equal(accept(3, 0, 0).reached.at(-1), 'rescued-elvira');
+  assert.equal(accept(3, 1, 0).reached.at(-1), 'summoned-cerberus');
+  assert.equal(accept(3, 2, 0).reached.at(-1), 'bound-cerberus');
+  assert.equal(accept(3, 3, 0).completed, 6, 'Lance use precedes the winning script');
+  assert.equal(accept(3, 3, 2).completed, 6, 'Late failure shares the same ritual stage');
+  assert.equal(accept(3, 20, 2).completed, 3, 'Early failure clears the ritual stage');
+  assert.equal(accept(3, 3, 1).reached.at(-1), 'winning-ending');
+  assert.equal(accept(0, 0, 1).percent, 100, 'The scripted Start load resets vars during the winning sequence');
+  assert.equal(accept(2, 0, 0).completed, 2, 'A restore uses the current save timeline');
+  assert.equal(accept(3, 3).reason, 'missing_game_variables');
+  assert.equal(accept(3, 3, 1, { ...identity, index_md5: undefined }).reason, 'edition_mismatch');
+  assert.equal(accept(3, 3, 1, { ...identity, index_md5: '0'.repeat(32) }).reason, 'edition_mismatch');
+});
+
+test('Sierra maps match their edition and distinguish the winning branches', async t => {
+  const editions = [
+    ['space-quest-the-sarien-encounter', 'agi', 'sq1', '0b216d931e95750f1f4837d6a4b821e5', 64, {}, 43],
+    ['space-quest-the-sarien-encounter-sq1sci', 'sci', 'sq1sci', '1dd1b7c042f0c7345730a94633d283fe', 2, { globals: { 12: 68 } }],
+    ['space-quest-ii-chapter-ii-vohaul-s-revenge', 'agi', 'sq2', '28add5125484302d213911df60d2aded', 95, { flag_bytes: { 8: 16 } }],
+    ['space-quest-iii-the-pirates-of-pestulon', 'sci', 'sq3', 'cc1a975fa0f80941b9485866ee6ff634', 117, { globals: { 12: 116 } }],
+    ['space-quest-iv-roger-wilco-and-the-time-rippers', 'sci', 'sq4', 'bd29d3fb8ea4a8ee638edaf40aa5f5ed', 540, { globals: { 12: 556 } }],
+    ['space-quest-v-the-next-mutation', 'sci', 'sq5', 'ea937aae231c4acdaeb249dea8f71060', 1041, { globals: { 12: 1060 } }],
+    ['space-quest-6-roger-wilco-in-the-spinal-frontier', 'sci', 'sq6', 'ed5ad1dfcfcae482072634c9a69c6a53', 960, { globals: { 12: 540 } }],
+    ['king-s-quest-quest-for-the-crown', 'sci', 'kq1sci', 'fcf6a00f2ff4715bf8ea65388458179d', 85, { globals: { 12: 53 } }],
+    ['king-s-quest-ii-romancing-the-throne', 'agi', 'kq2', 'b866f0fab2fad91433a637a828cfa410', 107, { flag_bytes: { 4: 4 } }],
+    ['king-s-quest-iii-to-heir-is-human', 'agi', 'kq3', '8ab343306df0e2d98f136be4e8cfd0ef', 74, { vars: { 220: 26 } }],
+    ['king-s-quest-iv-the-perils-of-rosella', 'sci', 'kq4sci', '53cceea993dc02611cc3cfb3f1c548bb', 694, { globals: { 160: 0 } }],
+    ['king-s-quest-v-absence-makes-the-heart-go-yonder', 'sci', 'kq5', 'a8a854af430e25c70e2b986f02239710', 123, { globals: { 12: 120 } }],
+    ['king-s-quest-vi-heir-today-gone-tomorrow', 'sci', 'kq6', '8ac79732f6f759158cda43e0b8b1988e', 740, { globals: { 12: 180 } }],
+    ['king-s-quest-vii-the-princeless-bride', 'sci', 'kq7', 'a000858d91155b948bf3b23fa71ff79a', 2210, { globals: { 12: 2208 } }],
+    ['police-quest-in-pursuit-of-the-death-angel', 'agi', 'pq1', 'cfa93e5f2aa7378bddd10ad6746a2ffb', 104, {}, 103],
+    ['police-quest-in-pursuit-of-the-death-angel-pq1sci', 'sci', 'pq1sci', '1bddd987b230086a13da172f85908d2c', 60, { globals: { 12: 58 } }],
+    ['police-quest-2-the-vengeance', 'sci', 'pq2', '499de78ae72b7ce219f944c5e7ef0c5b', 91, { globals: { 12: 133 } }],
+    ['police-quest-3-the-kindred', 'sci', 'pq3', '5bd82ed17c41e596df61782f850c6ade', 33, { globals: { 12: 57 } }],
+    ['police-quest-iv-open-season', 'sci', 'pq4', '069123b257f9e7655f13eb768397c345', 778, { globals: { 12: 755 } }],
+    ['police-quest-iv-open-season', 'sci', 'pq4', '069123b257f9e7655f13eb768397c345', 779, { globals: { 12: 778 } }],
+  ];
+  for (const [slug, engine_id, game_id, index_md5, ending, changes, otherRoom = ending] of editions) {
+    await t.test(`${game_id} ending room ${ending}`, async () => {
+      const evaluation = new RunEvaluation();
+      await evaluation.beginSession(slug);
+      const banks = engine_id === 'agi'
+        ? { vars: Array(256).fill(0), flag_bytes: Array(32).fill(0) }
+        : { globals: Array(256).fill(1) };
+      let sample_time_ms = 0;
+      function accept(room_id, md5 = index_md5) {
+        evaluation.accept({ current: null, events: [], progressTelemetry: {
+          identity: { engine_id, game_id, index_md5: md5 },
+          snapshot: { schema_version: 1, room_id, sample_time_ms: ++sample_time_ms, banks },
+        } });
+        return evaluation.progress;
+      }
+      assert.notEqual(accept(otherRoom).percent, 100);
+      for (const [bank, values] of Object.entries(changes)) Object.assign(banks[bank], values);
+      assert.equal(accept(ending, '0'.repeat(32)).reason, 'edition_mismatch');
+      const victory = accept(ending);
+      assert.equal(victory.percent, 100);
+      assert.equal(victory.reached.at(-1), 'winning-ending');
+    });
+  }
+});
+
 test('Beneath a Steel Sky scores saved script variables and the winning credits room', async () => {
   const evaluation = new RunEvaluation();
   await evaluation.beginSession('beneath-a-steel-sky');

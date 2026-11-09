@@ -1,0 +1,33 @@
+# English DOS 2.0F.
+# Traced against the original AGI logic resources for this edition.
+# Logic 95 shares the epilogue room with failures and shows the winning message only with flag 68.
+schema_version: 1
+game: space-quest-ii-chapter-ii-vohaul-s-revenge
+engine_id: agi
+edition:
+  game_id: sq2
+  index_md5: 28add5125484302d213911df60d2aded
+telemetry: snapshot
+scoring: highest_stage
+rooms:
+  asteroid-approach: 46
+  clone-launch-controls: 86
+  epilogue: 95
+variables:
+  score: { bank: vars, index: 3 }
+  max-score: { bank: vars, index: 7 }
+flags:
+  winning-escape: { bank: flag_bytes, index: 8, mask: 16 } # Flag 68.
+milestones:
+  - id: approached-asteroid
+    label: Approached Vohaul’s asteroid
+    when: { room: asteroid-approach }
+  - id: reached-clone-controls
+    label: Reached the clone launch controls
+    when: { room: clone-launch-controls }
+  - id: winning-ending
+    label: Escaped Vohaul and stopped the clone launch
+    when:
+      all:
+        - { room: epilogue }
+        - { flag: winning-escape }
