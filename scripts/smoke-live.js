@@ -21,7 +21,7 @@ try {
   await client.connect(new StdioClientTransport({ command: process.execPath, cwd: root,
     args: ['src/index.js', '--data-dir', dataDir] }));
   assert.deepEqual((await client.listTools()).tools.map(tool => tool.name).sort(),
-    ['act', 'list_games', 'observe', 'session', 'status']);
+    ['act', 'library', 'list_games', 'observe', 'session', 'status']);
   const launched = info(await call('session', { operation: 'start' }));
   let status;
   for (let attempt = 0; attempt < 15; attempt++) {
@@ -35,22 +35,26 @@ try {
   assert.equal(status.viewerOpen, true, status.viewerError || 'Viewer must open');
   const observed = await call('observe');
   const frame = info(observed);
-  assert.ok(frame.width > 300 && frame.width < 960);
-  assert.ok(frame.height > 200 && frame.height < 720);
-  assert.deepEqual(frame.displayBounds, { x: 0, y: 0, width: frame.width, height: frame.height });
+  assert.ok(frame.id);
+  assert.equal(frame.width, undefined);
+  assert.equal(frame.height, undefined);
+  const { dimensions: { width, height } } = info(await call('status'));
+  assert.ok(width > 300 && width < 960);
+  assert.ok(height > 200 && height < 720);
+  const center = { x: Math.floor(width / 2), y: Math.floor(height / 2) };
   await saveImage(observed, 'initial.jpg');
-  const sequence = { session_id: launched.sessionId, request_id: 'live-controls', frame_id: frame.id,
-    actions: [{ type: 'move', x: Math.floor(frame.width / 2), y: Math.floor(frame.height / 2) }, { type: 'screenshot' }, { type: 'click', x: Math.floor(frame.width / 2), y: Math.floor(frame.height / 2) },
-      { type: 'wait', milliseconds: 1500 }, { type: 'key', key: 'F5' }, { type: 'wait', milliseconds: 500 }, { type: 'screenshot' }] };
+  const sequence = { session_id: launched.sessionId, request_id: 'live-controls',
+    actions: [{ type: 'move', ...center }, { type: 'screenshot' }, { type: 'click', ...center },
+      { type: 'wait', ms: 1500 }, { type: 'key', key: 'F5' }, { type: 'wait', ms: 500 }, { type: 'screenshot' }] };
   const acted = await call('act', sequence);
   assert.equal(acted.isError, false, acted.content[0].text);
-  assert.equal(info(acted).screenshots.length, 2);
+  assert.equal(info(acted).steps.filter(step => step.frame_id).length, 2);
   assert.equal(acted.content.filter(item => item.type === 'image').length, 2);
   await saveImage(acted, 'after-input.jpg');
   const repeated = info(await call('act', sequence));
   assert.equal(repeated.replayed, true);
   const exitMenu = await call('act', { session_id: launched.sessionId, request_id: 'live-dismiss-menu',
-    actions: [{ type: 'key', key: 'Escape' }, { type: 'wait', milliseconds: 1200 }, { type: 'screenshot' }] });
+    actions: [{ type: 'key', key: 'Escape' }, { type: 'wait', ms: 1200 }, { type: 'screenshot' }] });
   assert.equal(exitMenu.isError, false);
   await saveImage(exitMenu, 'after-menu.jpg');
   const history = await call('observe', { source: 'history', seconds: 10, count: 4 });

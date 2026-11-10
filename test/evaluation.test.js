@@ -111,7 +111,7 @@ test('private evaluator interrupts an active wait and prevents remaining inputs'
   assert.equal(evaluation.result, undefined);
   assert.doesNotMatch(JSON.stringify(runtime.status()), /room_id|room_ready|Synthetic room|Laundry/);
   const request = { session_id: launch.sessionId, request_id: 'goal', actions: [
-    { type: 'click', x: 50, y: 50 }, { type: 'wait', milliseconds: 10000 }, { type: 'click', x: 90, y: 90 }] };
+    { type: 'click', x: 50, y: 50 }, { type: 'wait', ms: 10000 }, { type: 'click', x: 90, y: 90 }] };
   const started = performance.now();
   const result = await runtime.act(request);
   assert.ok(performance.now() - started < 5000, 'Do not wait out the submitted ten-second delay');
@@ -236,7 +236,7 @@ test('launcher accepts a variable-only provider and keeps receipts and telemetry
   assert.equal(JSON.parse(ready.result.content[0].text).phase, 'ready');
   // Do not depend on the last MCP response surviving transport shutdown; the receipt and exit code are the contract.
   void call('tools/call', { name: 'act', arguments: { session_id, request_id: 'finish', actions: [
-    { type: 'click', x: 50, y: 50 }, { type: 'wait', milliseconds: 10000 }, { type: 'click', x: 90, y: 90 }] } });
+    { type: 'click', x: 50, y: 50 }, { type: 'wait', ms: 10000 }, { type: 'click', x: 90, y: 90 }] } });
   assert.deepEqual(await exit, [0, null]);
   const result = JSON.parse(await readFile(resultFile, 'utf8'));
   assert.equal(result.success, true);

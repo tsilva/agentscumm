@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline';
 import { execFileSync } from 'node:child_process';
 import { appendFile, lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { shortId } from '../../../../src/ids.js';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -91,9 +92,14 @@ try {
     if (!line.trim()) continue;
     if (line.trim() === 'quit') break;
     let request;
+    let generatedId;
     const submittedAt = new Date().toISOString();
     try {
       request = JSON.parse(line);
+      if (request.name === 'act' && request.arguments?.request_id === undefined) {
+        generatedId = shortId();
+        request.arguments = { ...request.arguments, request_id: generatedId };
+      }
       const result = await client.callTool(request, undefined,
         request.name === 'act' ? { timeout: ACTION_REPLY_TIMEOUT_MS } : undefined);
       const content = [];
@@ -108,11 +114,13 @@ try {
           try { content.push(JSON.parse(item.text)); } catch { content.push(item.text); }
         }
       }
-      const output = { name: request.name, isError: Boolean(result.isError), content };
+      const output = { name: request.name, isError: Boolean(result.isError), content,
+        ...(generatedId && { request_id: generatedId }) };
       await appendFile(path.join(runDir, 'events.jsonl'), JSON.stringify({ timestamp: new Date().toISOString(), submittedAt, request, result: output }) + '\n', { mode: 0o600 });
       console.log(JSON.stringify(output));
     } catch (error) {
-      const output = { name: request?.name, isError: true, error: error.message };
+      const output = { name: request?.name, isError: true, error: error.message,
+        ...(generatedId && { request_id: generatedId }) };
       await appendFile(path.join(runDir, 'events.jsonl'), JSON.stringify({ timestamp: new Date().toISOString(), submittedAt, request, result: output }) + '\n', { mode: 0o600 });
       console.log(JSON.stringify(output));
     }

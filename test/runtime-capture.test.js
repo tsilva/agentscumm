@@ -9,6 +9,7 @@ import { startFixture } from './fixture.js';
 
 test('history begins at ready; startup checks and loading/error observations stay unbuffered', { timeout: 30000 }, async t => {
   const fixture = await startFixture();
+  fixture.setGameMode('elvira-ii-the-jaws-of-cerberus', 'error');
   const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-capture-'));
   const runtime = new GameRuntime({ baseUrl: fixture.url, dataDir, viewer: false, fps: 5 });
   let release, reached;
@@ -50,7 +51,7 @@ test('history begins at ready; startup checks and loading/error observations sta
   assert.ok(runtime.history.frames.every(frame => frame.phase === 'ready'));
 
   await runtime.closeGame();
-  await runtime.start({ game: 'broken-game', mode: 'beginning' });
+  await runtime.start({ game: 'elvira-ii-the-jaws-of-cerberus', mode: 'beginning' });
   assert.equal((await runtime.waitReady(10000)).phase, 'error');
   const error = await runtime.observe();
   assert.equal(error.phase, 'error');

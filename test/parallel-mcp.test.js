@@ -33,7 +33,7 @@ test('parallel stdio servers isolate profiles, input, history, viewers and shutd
   assert.notEqual(first.instanceId, second.instanceId);
   assert.notEqual(first.serverPid, second.serverPid);
   assert.notEqual(first.dataDir, second.dataDir);
-  await Promise.all([a('session', { operation: 'start' }), b('session', { operation: 'start', game: 'parallel-game' })]);
+  await Promise.all([a('session', { operation: 'start' }), b('session', { operation: 'start', game: 'elvira-ii-the-jaws-of-cerberus' })]);
   const [readyA, readyB] = (await Promise.all([a('status', { wait_ms: 15000 }), b('status', { wait_ms: 15000 })])).map(json);
   assert.equal(readyA.phase, 'ready', readyA.message);
   assert.equal(readyB.phase, 'ready', readyB.message);
@@ -44,8 +44,8 @@ test('parallel stdio servers isolate profiles, input, history, viewers and shutd
   assert.equal((await b('act', sequence(readyA))).isError, true, 'Cross-instance session IDs cannot deliver input');
   const [actionA, actionB] = await Promise.all([a('act', sequence(readyA)), b('act', sequence(readyB))]);
   for (const action of [actionA, actionB]) assert.equal(action.isError, false);
-  assert.equal(json(actionA).replayed, false);
-  assert.equal(json(actionB).replayed, false, 'The other agent has its own request cache');
+  assert.equal(json(actionA).replayed, undefined);
+  assert.equal(json(actionB).replayed, undefined, 'The other agent has its own request cache');
   assert.equal(json(await a('act', sequence(readyA))).replayed, true);
   for (const [call, state] of [[a, readyA], [b, readyB]]) {
     const frames = (await call('observe', { source: 'history', count: 3 })).content.filter(item => item.type === 'text').slice(1).map(item => JSON.parse(item.text));

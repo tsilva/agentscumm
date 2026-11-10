@@ -8,13 +8,56 @@ import { GameRuntime } from '../src/runtime.js';
 import { ACTION_TIMEOUT_MS } from '../src/actions.js';
 import { startFixture } from './fixture.js';
 
+test('fixed game crops keep capture and click coordinates aligned without a frame ID', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'agentscumm-fixed-crop-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const games = ['flight-of-the-amazon-queen', 'elvira-ii-the-jaws-of-cerberus'];
+  for (const [width, height, expected] of [
+    [960, 720, { x: 154, y: 115, width: 651, height: 490 }],
+    [640, 480, { x: 0, y: 0, width: 640, height: 480 }],
+  ]) {
+    const runtime = new GameRuntime({ dataDir: path.join(root, String(width)), width, height, viewer: false });
+    const inputs = [];
+    const clips = [];
+    let canvasBounds;
+    runtime.boot = async () => {
+      runtime.page = {
+        isClosed: () => false, viewportSize: () => ({ width, height }), close: async () => {},
+        screenshot: async ({ clip }) => { clips.push(clip); return Buffer.from('frame'); },
+        mouse: { move: async () => {}, click: async (x, y) => { inputs.push({ x, y }); } },
+      };
+      runtime.canvas = { boundingBox: async () => canvasBounds, focus: async () => {} };
+      runtime.phase = 'ready';
+    };
+    runtime.checkHealth = async () => {};
+    runtime.pollEvaluation = async () => {};
+    t.after(() => runtime.close());
+    for (const game of games) {
+      canvasBounds = { x: 0, y: 0, width, height };
+      const session = await runtime.start({ game, mode: 'beginning' });
+      await runtime.bootTask;
+      assert.deepEqual((await runtime.observe()).captureBounds, expected);
+      await assert.rejects(runtime.start({ game: 'beneath-a-steel-sky', restart: true }), /fixed bounding box/);
+      assert.equal(runtime.sessionId, session.sessionId, 'An unsupported launch leaves the active game in place');
+      // A change in the renderer's bounds must not change the coordinate origin.
+      canvasBounds = { x: 2, y: 8, width: width - 2, height: height - 8 };
+      const receipt = await runtime.act({ session_id: session.sessionId, request_id: 'fixed-crop',
+        actions: [{ type: 'click', x: 0, y: 0 }, { type: 'screenshot' }] });
+      assert.equal(receipt.action.state, 'completed');
+      assert.deepEqual(receipt.screenshots[0].captureBounds, expected);
+      assert.deepEqual(inputs.at(-1), { x: expected.x, y: expected.y });
+    }
+    assert.deepEqual(clips, Array(4).fill(expected));
+  }
+});
+
 test('action deadline returns captured frames and skips the remaining inputs', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const runtime = new GameRuntime({ viewer: false });
   const bounds = { x: 0, y: 0, width: 100, height: 100 };
   runtime.sessionId = 'test-session';
   runtime.assertReady = async () => {};
-  runtime.gameGeometry = async () => ({ captureBounds: bounds });
+  runtime.fixedCrop = bounds;
   runtime.canvas = { boundingBox: async () => bounds, focus: async () => {} };
   runtime.log = async () => {};
   runtime.capture = async reason => runtime.history.add(Buffer.from('frame'), { reason, step: runtime.currentStep });
@@ -28,7 +71,7 @@ test('action deadline returns captured frames and skips the remaining inputs', a
     });
   };
   const request = { session_id: runtime.sessionId, request_id: 'deadline',
-    actions: [{ type: 'screenshot' }, { type: 'wait', milliseconds: 500 }, { type: 'click', x: 25, y: 25 }] };
+    actions: [{ type: 'screenshot' }, { type: 'wait', ms: 500 }, { type: 'click', x: 25, y: 25 }] };
   const pending = runtime.act(request);
   await waitStarted.promise;
   t.mock.timers.tick(ACTION_TIMEOUT_MS);
@@ -40,6 +83,8 @@ test('action deadline returns captured frames and skips the remaining inputs', a
   assert.deepEqual(executed, ['wait']);
   assert.equal(result.screenshots.length, 1);
   assert.equal(result.action.steps[0].frameId, result.screenshots[0].id);
+  assert.equal(runtime.requestResult(request.session_id, request.request_id), result);
+  assert.deepEqual(runtime.requestResult(request.session_id, 'never-submitted'), { state: 'unknown' });
   assert.equal((await runtime.act(request)).replayed, true);
   assert.deepEqual(executed, ['wait']);
 });
@@ -57,8 +102,8 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   const first = await runtime.observe();
   assert.equal(first.width, 640); assert.equal(first.height, 480);
   assert.ok(first.data.length > 1000);
-  const request = { session_id: started.sessionId, request_id: 'first', frame_id: first.id,
-    actions: [{ type: 'click', x: 200, y: 120 }, { type: 'key', key: 'a' }, { type: 'wait', milliseconds: 100 }] };
+  const request = { session_id: started.sessionId, request_id: 'first',
+    actions: [{ type: 'click', x: 200, y: 120 }, { type: 'key', key: 'a' }, { type: 'wait', ms: 100 }] };
   const acted = await runtime.act(request);
   assert.equal(acted.action.state, 'completed'); assert.equal(acted.action.completed, 3);
   assert.deepEqual(acted.screenshots, []);
@@ -78,33 +123,18 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   await assert.rejects(runtime.act({ session_id: started.sessionId, request_id: 'invalid',
     actions: [{ type: 'click', x: 100, y: 100 }, { type: 'click', x: 10000, y: 0 }] }), /outside/);
   assert.equal(await countInputs(), 1);
-  // Screenshots crop to the game; input translates back through the crop offset.
+  // The fixed custom viewport keeps the same origin even when the canvas moves.
   await runtime.canvas.evaluate(canvas => {
     canvas.style.width = '400px'; canvas.style.height = '300px';
     canvas.style.marginLeft = '90px'; canvas.style.marginTop = '50px';
   });
   const resized = await runtime.observe();
-  assert.equal(resized.width, 400); assert.equal(resized.height, 300);
-  assert.equal(resized.canvasBounds.x, 0); assert.equal(resized.canvasBounds.y, 0);
-  assert.deepEqual(resized.captureBounds, { x: 90, y: 50, width: 400, height: 300 });
-  await assert.rejects(runtime.act({ ...request, request_id: 'stale-geometry' }), /geometry changed/);
-  await runtime.act({ session_id: started.sessionId, request_id: 'canvas-offset', frame_id: resized.id,
+  assert.deepEqual(resized.captureBounds, { x: 0, y: 0, width: 640, height: 480 });
+  await runtime.act({ session_id: started.sessionId, request_id: 'fixed-origin',
     actions: [{ type: 'click', x: 200, y: 120 }] });
   const offsetClick = await runtime.shell.evaluate(() => events.filter(e => e.type === 'mousedown').at(-1));
-  assert.equal(offsetClick.x, 200); assert.equal(offsetClick.y, 120);
-  const originalExecute = runtime.execute.bind(runtime);
-  runtime.execute = async (action, bounds, signal) => {
-    await originalExecute(action, bounds, signal);
-    if (action.type === 'key') await runtime.canvas.evaluate(canvas => { canvas.style.marginLeft = '91px'; });
-  };
-  const beforeShift = await countInputs();
-  const shifted = await runtime.act({ session_id: started.sessionId, request_id: 'geometry-during-sequence',
-    actions: [{ type: 'key', key: 'c' }, { type: 'click', x: 20, y: 20 }] });
-  assert.equal(shifted.action.state, 'failed');
-  assert.match(shifted.action.error, /geometry changed/);
-  assert.equal(await countInputs(), beforeShift, 'A changed crop must not receive a stale coordinate input');
-  runtime.execute = originalExecute;
-  await runtime.canvas.evaluate(canvas => { canvas.style.marginLeft = '90px'; });
+  assert.equal(offsetClick.x, 110); assert.equal(offsetClick.y, 70);
+  await runtime.canvas.evaluate(canvas => { canvas.style.margin = '0'; });
   await sleep(800);
   assert.ok(runtime.history.review({ count: 3 }).length >= 3);
 
@@ -113,7 +143,7 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   await runtime.viewer.page.waitForFunction(label => document.title === `AgentSCUMM - Flight of the Amazon Queen [${label}]`, runtime.instanceLabel);
   await runtime.viewer.page.waitForFunction(() => {
     const screen = document.getElementById('screen');
-    return screen.width === 400 && screen.height === 300;
+    return screen.width === 640 && screen.height === 480;
   });
   assert.equal(await runtime.page.locator('.game-route-controls').isVisible(), false);
   assert.equal(await runtime.page.locator('.game-route-bottom-actions').isVisible(), false);
@@ -169,7 +199,7 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   assert.equal((await fetch(new URL('status', viewerUrl))).status, 200);
   assert.equal((await fetch(new URL('status', viewerUrl), { method: 'POST' })).status, 405);
   assert.equal((await fetch(new URL('/status', viewerUrl))).status, 404);
-  assert.equal((await runtime.observe()).width, 400);
+  assert.equal((await runtime.observe()).width, 640);
 
   // Failure halfway through: retain completed steps, never issue the rest, never replay on retry.
   const execute = runtime.execute.bind(runtime);
@@ -234,18 +264,20 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   await assert.rejects(runtime.act({ ...request, request_id: 'stale-session' }), /Session ID/);
   await runtime.closeGame();
 
-  await runtime.start({ game: 'broken-game', mode: 'beginning' });
+  fixture.setGameMode('elvira-ii-the-jaws-of-cerberus', 'error');
+  await runtime.start({ game: 'elvira-ii-the-jaws-of-cerberus', mode: 'beginning' });
   assert.equal((await runtime.waitReady(10000)).phase, 'error');
   assert.match(runtime.status().message, /Fixture startup error/);
   await runtime.closeGame();
-  await runtime.start({ game: 'fallback-game', mode: 'beginning' });
+  fixture.setGameMode('elvira-ii-the-jaws-of-cerberus', 'fallback');
+  await runtime.start({ game: 'elvira-ii-the-jaws-of-cerberus', mode: 'beginning' });
   assert.equal((await runtime.waitReady(10000)).phase, 'error');
   assert.match(runtime.status().message, /not confirmed/);
   await runtime.closeGame();
   await runtime.start();
   assert.equal((await runtime.waitReady(15000)).phase, 'ready');
   const pending = runtime.act({ session_id: runtime.sessionId, request_id: 'shutdown-wait',
-    actions: [{ type: 'wait', milliseconds: 10000 }] });
+    actions: [{ type: 'wait', ms: 10000 }] });
   for (let attempt = 0; attempt < 200 && !runtime.actions.some(action =>
     action.requestId === 'shutdown-wait' && action.steps.some(step => step.state === 'issuing')); attempt++) await sleep(10);
   assert.ok(runtime.actions.some(action => action.requestId === 'shutdown-wait' &&

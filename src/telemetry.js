@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { shortIdPattern } from './ids.js';
 
 const bankName = z.string().regex(/^[a-z][a-z0-9_]{0,39}$/);
 const sampleTime = z.number().nonnegative();
@@ -15,7 +16,7 @@ const snapshotSchema = z.object({
 });
 
 export const telemetryQuery = {
-  session_id: z.string().uuid(), bank: bankName.optional(),
+  session_id: z.string().regex(shortIdPattern), bank: bankName.optional(),
   offset: z.number().int().min(0).max(4095).optional(),
   limit: z.number().int().min(1).max(256).optional(),
 };

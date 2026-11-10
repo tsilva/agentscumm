@@ -150,7 +150,7 @@ def runtime_session(objects):
         session = value.get("sessionId")
         game, profile = value.get("game"), value.get("dataDir")
         if (isinstance(session, str)
-                and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", session)
+                and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|[A-Za-z0-9_-]{10}[AEIMQUYcgkosw048]", session)
                 and isinstance(game, str) and isinstance(profile, str) and Path(profile).is_absolute()):
             return session, game, Path(profile)
 
@@ -556,10 +556,29 @@ class Screenshots:
             yield from Screenshots.native_images(parsed)
 
     @staticmethod
+    def receipt_frames(value):
+        if isinstance(value, dict) and value.get("type") in ("text", "input_text"):
+            value = value.get("text")
+        if isinstance(value, str) and value.startswith("{"):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return []
+        if not isinstance(value, dict) or not isinstance(value.get("steps"), list):
+            return []
+        return [{"id": step["frame_id"], "capture_ms": step["capture_ms"], "step": index}
+                for index, step in enumerate(value["steps"])
+                if isinstance(step, dict) and isinstance(step.get("frame_id"), str)
+                and type(step.get("capture_ms")) is int]
+
+    @staticmethod
     def selected_frames(value):
         if isinstance(value, dict):
             if type(value.get("selectedFrames")) is int:
                 return value["selectedFrames"]
+            frames = Screenshots.receipt_frames(value)
+            if frames:
+                return len(frames)
             for child in value.values():
                 found = Screenshots.selected_frames(child)
                 if found is not None:
@@ -603,7 +622,7 @@ class Screenshots:
             self.references += 1
         if frame:
             alias = {key: frame[key] for key in
-                     ("id", "sessionId", "timestamp", "actionId", "step", "width", "height")
+                     ("id", "sessionId", "timestamp", "capture_ms", "actionId", "step", "width", "height")
                      if key in frame}
             key = (alias.get("sessionId"), alias["id"])
             require(key not in self.frame_map or self.frame_map[key] == screenshot_id,
@@ -712,7 +731,7 @@ class Screenshots:
             result = item["result"]
             selected = self.selected_frames(result)
             frame = next((frame for obj in runtime_objects(result) if (frame := self.frame_metadata(obj))), None)
-            if not frame:
+            if not frame and not (tool == "act" and selected == 1):
                 continue
             fresh_observation = tool == "observe" and selected is None and frame.get("source") == "fresh"
             if selected != 1 and not fresh_observation:
@@ -738,6 +757,10 @@ class Screenshots:
         expected = self.selected_frames(result)
         if expected != len(captions) or expected < 2:
             return []
+        if item["tool"] == "act" and captions[0] and all(caption is None for caption in captions[1:]):
+            frames = self.receipt_frames(captions[0])
+            if len(frames) == expected and any(self.receipt_frames(obj) == frames for obj in runtime_objects(result)):
+                return [(number, images, expected)]
         first = next((frame for obj in runtime_objects(result) if (frame := self.frame_metadata(obj))), None)
         if not first or not first.get("sessionId") or not first.get("game"):
             return []
@@ -785,7 +808,7 @@ class Screenshots:
             return False
         frame_ids = [frame["frame"] for frame in metadata]
         if (len(set(frame_ids)) != len(frame_ids)
-                or metadata[0] != {"frame": first["id"], "width": first["width"], "height": first.get("height")}):
+                or metadata[0] != {"frame": first["id"], "width": first.get("width"), "height": first.get("height")}):
             return False
         # Explicit screenshots precede the optional final capture in an act response.
         for obj in runtime_objects(result):
@@ -855,17 +878,23 @@ class Screenshots:
             except ValueError:
                 return None
         if isinstance(value, dict) and isinstance(value.get("id"), str) and \
-                value.get("mimeType", "").startswith("image/") and "width" in value:
+                value.get("mimeType", "").startswith("image/") and ("width" in value or "capture_ms" in value):
             return value
         return None
 
-    def transform(self, value, frame=None):
+    def transform(self, value, frame=None, session_id=None):
         if isinstance(value, list):
             result = []
-            # MCP imageContent puts each frame's metadata immediately before its image.
+            receipt_frames = iter(())
             for item in value:
-                result.append(self.transform(item, frame))
+                if isinstance(item, dict) and item.get("type") == "image" and frame is None:
+                    frame = next(receipt_frames, None)
+                    if frame and session_id:
+                        frame = {**frame, "sessionId": session_id}
+                result.append(self.transform(item, frame, session_id))
                 frame = self.frame_metadata(item)
+                if frames := self.receipt_frames(item):
+                    receipt_frames = iter(frames)
             return result
         if isinstance(value, dict):
             if value.get("type") == "image" and "data" in value:
@@ -903,7 +932,9 @@ class Screenshots:
                     return {**{k: v for k, v in value.items() if k != "image_url"},
                             "screenshot": ref, "source_encoding": "data_url"}
                 self.unresolved.append({"type": value["type"], "reason": "non-embedded image"})
-            return {key: self.transform(item, frame) for key, item in value.items()}
+            if value.get("type") == "McpToolCall" and value.get("server") == "agentscumm":
+                session_id = (value.get("arguments") or {}).get("session_id")
+            return {key: self.transform(item, frame, session_id) for key, item in value.items()}
         if isinstance(value, str):
             # MCP results also occur inside JSON-encoded text blocks. Preserve the
             # string wrapper, changing it only when it contains embedded images.
@@ -912,7 +943,7 @@ class Screenshots:
                     decoded = json.loads(value)
                 except ValueError:
                     return value
-                transformed = self.transform(decoded, frame)
+                transformed = self.transform(decoded, frame, session_id)
                 return dump(transformed) if transformed != decoded else value
             match = DATA_URL.fullmatch(value)
             if match:

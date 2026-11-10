@@ -11,7 +11,7 @@ Use AgentSCUMM's MCP tools as the complete gameplay interface, preferably throug
 
 ## Start or resume
 
-Resolve the AgentSCUMM repository from this skill's real path for run storage. Read the current MCP tool schemas and use `list_games` to map game names to catalog slugs; ask only if the requested game is genuinely ambiguous or unavailable. Use that slug as `game-id`. If the attached MCP is unavailable, try a supported host reconnect when readily available, then use the local MCP client below rather than repeatedly debugging the desktop host or asking the user to restart it.
+Resolve the AgentSCUMM repository from this skill's real path for run storage. Read the current MCP tool schemas and use `list_games` to map game names to catalog slugs; ask only if the requested game is genuinely ambiguous or unavailable. Use that slug as `game-id`. An entry with `launchable: false` needs a fixed AgentSCUMM crop before play. If the attached MCP is unavailable, try a supported host reconnect when readily available, then use the local MCP client below rather than repeatedly debugging the desktop host or asking the user to restart it.
 
 ### Commit before play
 
@@ -86,7 +86,7 @@ Select tools by purpose; use their current schemas for arguments and limits:
 
 Use the current MCP tool schemas and returned observations for mechanical controls and limits. Work through the game autonomously: observe, decide, act, and check what happened. Use the current session ID and a unique request ID for each `act`. Include a `screenshot` step wherever you need visual feedback, including at the end of a batch when needed.
 
-Wait for the original `act` reply in one model tool call. Give the calling host a full minute to receive the result. In Codex code mode, use a 60-second exec yield window for action calls. Keep any local process reads inside that same tool call. This applies to every game and strategy. If the receipt is missing after a timeout or disconnect, check `status.recentActions` for the original request ID and take a fresh observation before sending new inputs. A known accepted request can be replayed with the same ID and identical arguments to retrieve its cached receipt.
+Wait for the original `act` reply in one model tool call. Give the calling host a full minute to receive the result. In Codex code mode, use a 60-second exec yield window for action calls. Keep any local process reads inside that same tool call. This applies to every game and strategy. If the receipt is missing after a timeout or disconnect, call `status` with the original session and request IDs and take a fresh observation before sending new inputs. A known accepted request can be replayed with the same ID and identical arguments to retrieve its cached receipt.
 
 Use fresh screenshots to ground clicks, especially after inventory changes. Allow walking, dialogue, and animations to finish. A delivered sequence can include clicks the game ignored while busy; inspect its result and use `observe(source="history")` promptly for transient events. Prefer shorter sequences at uncertain transitions and batch predictable actions when useful. Do not require single-batch solving unless requested.
 

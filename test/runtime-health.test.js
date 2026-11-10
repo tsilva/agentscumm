@@ -9,6 +9,7 @@ import { startFixture } from './fixture.js';
 
 async function setup(t, fixtureOptions, runtimeOptions) {
   const fixture = await startFixture(fixtureOptions);
+  fixture.setGameMode('elvira-ii-the-jaws-of-cerberus', 'failed-download');
   const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-health-'));
   const runtime = new GameRuntime({ baseUrl: fixture.url, dataDir, viewer: false, fps: 2, ...runtimeOptions });
   t.after(async () => { await runtime.close(); await fixture.close(); await rm(dataDir, { recursive: true, force: true }); });
@@ -142,7 +143,7 @@ test('stalled archive downloads and the overall launch cap still time out', { ti
 
 test('a failed download is reported even if the runtime iframe renders', { timeout: 15000 }, async t => {
   const runtime = await setup(t);
-  await runtime.start({ game: 'failed-download' });
+  await runtime.start({ game: 'elvira-ii-the-jaws-of-cerberus' });
   const result = await runtime.waitReady(10000);
   assert.equal(result.phase, 'error');
   assert.equal(result.message, 'Could not download the game ZIP');

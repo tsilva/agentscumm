@@ -38,20 +38,20 @@ test('macOS spectator has app identity, receives frames, and reopens independent
   for (let i = 0; i < 100 && framesRequested < 2; i++) await sleep(100);
   assert.ok(framesRequested >= 2, `WebKit must fetch successive live frames (received ${framesRequested})`);
   assert.deepEqual(runtime.page.viewportSize(), { width: 960, height: 720 });
-  // Native content follows geometry changes rather than a fixed per-game ratio.
+  // The spectator keeps the same size when the canvas changes underneath the crop.
   for (const [width, height] of [[640, 360], [320, 480], [800, 600]]) {
     await runtime.canvas.evaluate((canvas, size) => {
       canvas.width = size.width; canvas.height = size.height;
       canvas.style.width = `${size.width}px`; canvas.style.height = `${size.height}px`;
     }, { width, height });
-    await runtime.observe();
-    for (let i = 0; i < 50 && (native.windowGeometry?.gameWidth !== width || native.windowGeometry?.gameHeight !== height); i++) await sleep(100);
-    assert.equal(native.windowGeometry?.gameWidth, width, JSON.stringify({ native: native.windowGeometry,
-      frame: runtime.history.latest()?.displayBounds, framesRequested, isOpen: native.isOpen }));
-    assert.equal(native.windowGeometry?.gameHeight, height);
-    assert.ok(Math.abs(native.windowGeometry.contentWidth / (native.windowGeometry.contentHeight - native.windowGeometry.footerHeight) - width / height) < 0.005,
-      'Window content fits the current game aspect ratio');
+    const frame = await runtime.observe();
+    assert.deepEqual(frame.captureBounds, { x: 154, y: 115, width: 651, height: 490 });
   }
+  for (let i = 0; i < 50 && native.windowGeometry?.gameWidth !== 651; i++) await sleep(100);
+  assert.equal(native.windowGeometry?.gameWidth, 651);
+  assert.equal(native.windowGeometry?.gameHeight, 490);
+  assert.ok(Math.abs(native.windowGeometry.contentWidth /
+    (native.windowGeometry.contentHeight - native.windowGeometry.footerHeight) - 651 / 490) < 0.005);
   const pid = native.child.pid;
   await runtime.viewer.open();
   assert.equal(runtime.viewer.native.child.pid, pid, 'Reuse the open window');
@@ -66,7 +66,7 @@ test('macOS spectator has app identity, receives frames, and reopens independent
   assert.equal(runtime.status().viewerOpen, true);
   assert.notEqual(runtime.viewer.native.child.pid, pid);
   assert.equal(runtime.sessionId, sessionId);
-  assert.equal((await runtime.observe()).width, 800);
+  assert.equal((await runtime.observe()).width, 651);
   await runtime.close();
   assert.equal(runtime.status().viewerOpen, false);
 });

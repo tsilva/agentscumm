@@ -36,6 +36,8 @@ Commit all checkout changes before starting or resuming play. The skill stops on
 
 Before gameplay, the skill synchronizes the current branch and verifies that the MCP loaded that clean revision. Codex handles stale-server restarts and uses the included local MCP client automatically if the attached connection is unavailable; see [usage and controls](docs/usage.md#play-game-skill).
 
+AgentSCUMM can launch games with a [fixed screenshot crop](docs/usage.md#tools). Flight of the Amazon Queen and Elvira II are configured.
+
 The game loads, a read-only spectator opens, and Codex starts playing toward the ending. You can request a milestone, pause, or resume a saved run. Closing the spectator leaves the game running; closing the MCP server ends the active session. Recovery depends on saves made inside the game.
 
 Run multiple agents in parallel by giving each its own MCP server process. Servers automatically isolate their game profiles, logs, history, and spectators. Use `--instance agent-a` and `--instance agent-b` for named profiles that retain saves across server restarts; see [parallel instances](docs/usage.md#parallel-instances).

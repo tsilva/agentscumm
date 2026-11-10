@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import { shortId } from './ids.js';
 
 export class FrameHistory {
   constructor({ seconds = 60, maxBytes = 64 * 1024 * 1024, maxFrames = 900 } = {}) {
@@ -7,11 +8,10 @@ export class FrameHistory {
     this.maxFrames = maxFrames;
     this.frames = [];
     this.bytes = 0;
-    this.counter = 0;
   }
 
   add(data, metadata = {}) {
-    const frame = { ...metadata, id: `frame-${++this.counter}`, timestamp: new Date().toISOString(),
+    const frame = { ...metadata, id: shortId(), timestamp: new Date().toISOString(),
       monotonicMs: performance.now(), mimeType: 'image/jpeg', data };
     this.frames.push(frame);
     this.bytes += data.length;
@@ -51,7 +51,11 @@ export class FrameHistory {
 
 export function frameInfo({ data, ...metadata }) { return metadata; }
 
-export function imageContent(frame) {
-  return [{ type: 'text', text: JSON.stringify(frameInfo(frame)) },
-    { type: 'image', mimeType: frame.mimeType, data: frame.data.toString('base64') }];
+export function imageBlock({ data, mimeType }) {
+  return { type: 'image', mimeType, data: data.toString('base64') };
+}
+
+export function imageContent({ data, width, height, canvasBounds, displayBounds, captureBounds, monotonicMs, ...metadata }) {
+  return [{ type: 'text', text: JSON.stringify({ ...metadata, capture_ms: Math.round(monotonicMs) }) },
+    imageBlock({ data, mimeType: metadata.mimeType })];
 }

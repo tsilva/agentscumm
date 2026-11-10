@@ -6,7 +6,8 @@ import { z } from 'zod';
 import metadata from '../package.json' with { type: 'json' };
 import { GameRuntime } from './runtime.js';
 import { actionSchema } from './actions.js';
-import { imageContent } from './history.js';
+import { imageBlock, imageContent } from './history.js';
+import { shortIdPattern } from './ids.js';
 import path from 'node:path';
 import { RunEvaluation, evaluationReporter } from './evaluation.js';
 import { telemetryQuery } from './telemetry.js';
@@ -43,13 +44,15 @@ const reporter = evaluation ? await evaluationReporter(evaluationLog, resultFile
 const { name, version } = metadata;
 const server = new McpServer({ name, version }, {
   instructions: 'Start a ScummWEB game with session(operation="start"), poll status(wait_ms=10000) until phase=ready, then observe and act. '
-    + 'Ready screenshots show only the game; dimensions can change with menus. Coordinates are screenshot-relative CSS pixels. Supply session_id and a unique request_id for each action sequence; '
+    + 'Ready screenshots use a fixed crop. Coordinates are screenshot-relative CSS pixels. Supply session_id and a unique request_id for each action sequence; '
     + 'reuse the same request_id only to retrieve the identical request result after an uncertain response. '
     + 'Input delivery is not proof of puzzle success. Use observe(source="history") for missed events. The spectator is read-only. '
     + 'Each server owns one game. Separate server processes run independently in parallel; status identifies this instance and its data directory.',
 });
 
 const text = value => ({ type: 'text', text: JSON.stringify(value) });
+const sessionId = z.string().regex(shortIdPattern);
+const requestId = z.string().min(1).max(100);
 const registeredTools = [];
 function tool(name, description, inputSchema, callback, readOnly = false) {
   server.registerTool(name, { description, inputSchema,
@@ -61,7 +64,7 @@ function tool(name, description, inputSchema, callback, readOnly = false) {
   registeredTools.push(name);
 }
 
-tool('list_games', 'List known ScummWEB game slugs. Launch also accepts future catalog slugs.', {},
+tool('list_games', 'List known ScummWEB games. Entries with launchable=false need an AgentSCUMM crop before launch.', {},
   async () => ({ content: [text({ baseUrl: runtime.baseUrl.origin, games: await runtime.listGames() })] }), true);
 
 tool('library', 'Import local game ZIPs through ScummWEB’s normal file importer in this instance. Starts an asynchronous job; poll operation=status for the site’s results. Close any active game first. ZIPs remain at their original paths and must stay available for relaunch. Imported entries appear in list_games.', {
@@ -74,7 +77,7 @@ tool('library', 'Import local game ZIPs through ScummWEB’s normal file importe
 
 tool('session', 'Manage the owned game session: start returns immediately; close ends the game and clears history while preserving saves. open_viewer opens the read-only spectator. close_viewer requires the active session_id after startup and closes only the spectator. Starting the active game reuses it unless restart=true. Poll status for readiness. Pass the same run_id with mode=continue to reopen its save scope in the same instance.', {
   operation: z.enum(['start', 'close', 'open_viewer', 'close_viewer']),
-  session_id: z.uuid().optional().describe('Required for close_viewer only; use the active game session ID.'),
+  session_id: sessionId.optional().describe('Required for close_viewer only; use the active game session ID.'),
   game: z.string().optional().describe('Start only; defaults to flight-of-the-amazon-queen.'),
   mode: z.enum(['skip_intro', 'beginning', 'continue']).optional().describe('Start only; defaults to skip_intro.'),
   restart: z.boolean().optional().describe('Start only; defaults to false.'),
@@ -93,25 +96,34 @@ tool('session', 'Manage the owned game session: start returns immediately; close
   return { content: [text({ viewerUrl: await runtime.openViewer() })] };
 });
 
-tool('status', 'Check renderer/runtime health, startup progress, connection, history coverage, spectator and recent actions. nativeControls lists the available native actions or gives the reason they are unavailable. Optional wait_ms waits up to 25 seconds while loading. Ready means rendered startup content; inspect the screen for menus or intros.', {
+tool('status', 'Check game readiness and native controls. With session_id and request_id, look up one action receipt. Set include_images to recover its explicit captures. Optional wait_ms waits up to 25 seconds while loading.', {
   wait_ms: z.number().int().min(0).max(25000).default(0),
-}, async ({ wait_ms }) => ({ content: [text(await runtime.waitReady(wait_ms))] }), true);
+  session_id: sessionId.optional(), request_id: requestId.optional(), include_images: z.boolean().optional(),
+}, async ({ wait_ms, session_id, request_id, include_images }) => {
+  if (!session_id && !request_id && include_images === undefined) {
+    return { content: [text(await runtime.waitReady(wait_ms))] };
+  }
+  if (!session_id || !request_id || wait_ms) throw new Error('Action lookup requires session_id and request_id without a wait');
+  const { action, state, screenshots = [] } = runtime.requestResult(session_id, request_id);
+  return { content: [text(action ? { session_id, action } : { session_id, request_id, state }),
+    ...(include_images && action?.state !== 'running' ? screenshots.flatMap(imageContent) : [])] };
+}, true);
 
 if (values.telemetry) {
   tool('telemetry', 'Query native room and variable bank metadata for the current session. Choose a bank to read a bounded page of indexed values or sorted keys and values. Availability depends on the engine and game state.', telemetryQuery,
     async args => ({ content: [text(await runtime.telemetry(args))] }), true);
 }
 
-tool('observe', 'Read game images without input. fresh (default) captures now, including loading/error screens; frames retrieves 1–8 exact frame_ids; history samples recent frames using seconds/count or action_id. Unavailable frames are errors, never replaced by fresh images. Loading/error captures are unbuffered.', {
+tool('observe', 'Read game images without input. fresh captures now. frames retrieves 1–8 exact frame IDs. history samples recent frames or filters by session_id and request_id. Loading and error captures are unbuffered.', {
   source: z.enum(['fresh', 'frames', 'history']).default('fresh'),
   frame_ids: z.array(z.string()).min(1).max(8).optional(),
   seconds: z.number().min(0.1).max(300).optional(),
   count: z.number().int().min(1).max(8).optional(),
-  action_id: z.string().optional(),
-}, async ({ source, frame_ids, seconds, count, action_id }) => {
+  action_id: z.string().optional(), session_id: sessionId.optional(), request_id: requestId.optional(),
+}, async ({ source, frame_ids, seconds, count, action_id, session_id, request_id }) => {
   if (source !== 'frames' && frame_ids !== undefined) throw new Error('frame_ids requires source="frames"');
-  if (source !== 'history' && [seconds, count, action_id].some(value => value !== undefined)) {
-    throw new Error('seconds, count and action_id require source="history"');
+  if (source !== 'history' && [seconds, count, action_id, session_id, request_id].some(value => value !== undefined)) {
+    throw new Error('History filters require source="history"');
   }
   if (source === 'fresh') return { content: imageContent({ ...await runtime.observe(), source }) };
   if (source === 'frames') {
@@ -123,21 +135,39 @@ tool('observe', 'Read game images without input. fresh (default) captures now, i
     });
     return { content: frames.flatMap(frame => imageContent({ ...frame, source })) };
   }
+  if (session_id || request_id) {
+    if (!session_id || !request_id || action_id) throw new Error('Request history requires session_id and request_id together');
+    const { action, state } = runtime.requestResult(session_id, request_id);
+    if (!action) throw new Error(`Action receipt is ${state}`);
+    action_id = action.actionId;
+  }
   const frames = runtime.history.review({ seconds: seconds ?? 15, count: count ?? 4, actionId: action_id });
   return { content: [text({ source, selectedFrames: frames.length, history: runtime.history.status() }),
     ...frames.flatMap(frame => imageContent({ ...frame, source }))] };
 }, true);
 
 tool('act', 'Execute up to 32 ordered steps, including up to 8 explicit screenshots and 20 seconds of input holds/waits. Wait for one final receipt with the outcome of every step and images for successful screenshot steps only. Add a screenshot step at the end if you need to see the result. Mix clicks, keys, waits and screenshots with native pause, resume (play), wait_ticks (advance and hold), save(id) and load(id) in the same actions array. Use the native controls advertised by status.nativeControls.actions. Save and load use run-local integer slots. Unsupported native steps reject the batch before input. A failed step stops the batch. After an uncertain reply, check status and observe before issuing new input.', z.strictObject({
-  session_id: z.string().uuid(), request_id: z.string().min(1).max(100),
-  frame_id: z.string().optional(), actions: z.array(actionSchema).min(1).max(32),
+  session_id: sessionId, request_id: requestId,
+  actions: z.array(actionSchema).min(1).max(32).describe('Coordinates are CSS pixels from the screenshot top-left.'),
 }), async (args, signal) => {
-  const { screenshots, ...result } = await runtime.act(args, signal);
-  return { isError: result.action.state === 'failed', content: [
-    text({ ...result, selectedFrames: screenshots.length,
-      screenshots: screenshots.map(frame => ({ step: frame.step, frame_id: frame.id })) }),
-    ...screenshots.flatMap(imageContent),
-  ] };
+  const { action, replayed, screenshots } = await runtime.act(args, signal);
+  const replay = replayed ? { replayed: true } : {};
+  if (action.code === 'ACTION_TIMEOUT') {
+    return { isError: true, content: [text({ error: action.code, ...replay })] };
+  }
+  const isError = action.state === 'failed';
+  const steps = action.steps.map(step => {
+    if (step.state === 'captured') {
+      const frame = screenshots.find(frame => frame.id === step.frameId);
+      return { frame_id: frame.id, capture_ms: Math.round(frame.monotonicMs) };
+    }
+    if (step.state === 'delivered') return step.control ? { control: step.control } : {};
+    return { state: step.state };
+  });
+  return { ...(isError && { isError }), content: [text({ steps,
+    ...(isError && { error: action.code ?? action.error }),
+    ...(action.state === 'stopped' && { state: 'stopped' }), ...replay }),
+    ...screenshots.map(imageBlock)] };
 });
 
 Object.assign(runtime.sourceRevision, { mcp_version: version, mcp_tools: registeredTools.sort() });

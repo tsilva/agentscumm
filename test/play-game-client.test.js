@@ -34,10 +34,10 @@ function startClient(args) {
 
 test('play-game client records MCP images and calls inside a resumable run', { timeout: 40000 }, async t => {
   const fixture = await startFixture();
-  const runDir = path.join(root, '.internal/synthetic-game', `client-test-${randomUUID()}`);
+  const runDir = path.join(root, '.internal/flight-of-the-amazon-queen', `client-test-${randomUUID()}`);
   const args = ['--run-dir', runDir, '--no-viewer', '--base-url', fixture.url];
   const client = startClient(args);
-  client.child.stdin.write(JSON.stringify({ name: 'session', arguments: { operation: 'start', game: 'synthetic-game', mode: 'beginning' } }) + '\n');
+  client.child.stdin.write(JSON.stringify({ name: 'session', arguments: { operation: 'start', game: 'flight-of-the-amazon-queen', mode: 'beginning' } }) + '\n');
   t.after(async () => {
     if (client.child.exitCode === null) client.child.kill('SIGTERM');
     await client.exited; await fixture.close(); await rm(runDir, { recursive: true, force: true });
@@ -54,9 +54,10 @@ test('play-game client records MCP images and calls inside a resumable run', { t
   const data = await readFile(image.image);
   assert.equal(data.subarray(0, 2).toString('hex'), 'ffd8');
   const acted = await client.call('act', { session_id: launched.content[0].sessionId,
-    request_id: 'client-sequence', actions: [{ type: 'click', x: 100, y: 100 }, { type: 'wait', milliseconds: 100 }] });
+    actions: [{ type: 'click', x: 100, y: 100 }, { type: 'wait', ms: 100 }] });
   assert.equal(acted.isError, false);
-  assert.equal(acted.content[0].action.completed, 2);
+  assert.deepEqual(acted.content[0].steps, [{}, {}]);
+  assert.match(acted.request_id, /^[A-Za-z0-9_-]{11}$/);
   assert.equal(acted.content.length, 1, 'The client returns only the final receipt for input-only batches');
   const events = (await readFile(path.join(runDir, 'events.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   assert.equal(events.length, 4);
@@ -73,7 +74,7 @@ test('play-game client records MCP images and calls inside a resumable run', { t
   const resumed = startClient([...args, '--resume']);
   assert.equal((await resumed.next()).ready, true);
   assert.equal((await resumed.call('status')).content[0].phase, 'idle');
-  const reopened = await resumed.call('session', { operation: 'start', game: 'synthetic-game', mode: 'continue' });
+  const reopened = await resumed.call('session', { operation: 'start', game: 'flight-of-the-amazon-queen', mode: 'continue' });
   assert.equal(reopened.content[0].runId, launched.content[0].runId, 'Continue uses the same run scope after process restart');
   assert.equal(new URL(reopened.content[0].url).searchParams.get('agentSaveScope'),
     new URL(launched.content[0].url).searchParams.get('agentSaveScope'));
@@ -84,7 +85,7 @@ test('play-game client records MCP images and calls inside a resumable run', { t
 
 test('play-game client forwards an evaluator goal and exits when it succeeds', { timeout: 30000 }, async t => {
   const fixture = await startFixture({ evaluation: true });
-  const runDir = path.join(root, '.internal/synthetic-game', `goal-test-${randomUUID()}`);
+  const runDir = path.join(root, '.internal/flight-of-the-amazon-queen', `goal-test-${randomUUID()}`);
   const condition = { all: [{ variable: 'engine_id', equals: 'queen' },
     { variable: 'room_id', equals: 71 }, { variable: 'room_ready', equals: true }] };
   const client = startClient(['--run-dir', runDir, '--no-viewer', '--base-url', fixture.url,
@@ -94,12 +95,12 @@ test('play-game client forwards an evaluator goal and exits when it succeeds', {
     await client.exited; await fixture.close(); await rm(runDir, { recursive: true, force: true });
   });
   assert.equal((await client.next()).ready, true);
-  await client.call('session', { operation: 'start', game: 'synthetic-game', mode: 'beginning' });
+  await client.call('session', { operation: 'start', game: 'flight-of-the-amazon-queen', mode: 'beginning' });
   const launched = await client.call('status', { wait_ms: 10000 });
   assert.equal(launched.content[0].phase, 'ready');
   client.child.stdin.write(JSON.stringify({ name: 'act', arguments: {
     session_id: launched.content[0].sessionId, request_id: 'goal', actions: [
-      { type: 'click', x: 20, y: 20 }, { type: 'wait', milliseconds: 10000 }, { type: 'click', x: 30, y: 30 }],
+      { type: 'click', x: 20, y: 20 }, { type: 'wait', ms: 10000 }, { type: 'click', x: 30, y: 30 }],
   } }) + '\n');
   let ended;
   do { ended = await client.next(); } while (ended.event !== 'evaluation-ended');

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FrameHistory } from '../src/history.js';
+import { FrameHistory, frameInfo, imageContent } from '../src/history.js';
 import { validateSequence, SerialQueue } from '../src/actions.js';
 
 test('history enforces byte/time bounds and retrieves chronological samples', () => {
@@ -17,10 +17,23 @@ test('history enforces byte/time bounds and retrieves chronological samples', ()
   assert.equal(history.bytes, 0);
 });
 
+test('MCP image blocks carry frame identity and time without repeating renderer geometry', () => {
+  const history = new FrameHistory();
+  const frame = history.add(Buffer.from('image bytes'), { width: 651, height: 490,
+    canvasBounds: { x: -154, y: 0, width: 960, height: 490 },
+    displayBounds: { x: 0, y: 0, width: 651, height: 490 },
+    captureBounds: { x: 154, y: 115, width: 651, height: 490 }, step: 2 });
+  const [info, image] = imageContent(frame);
+  assert.deepEqual(JSON.parse(info.text), { id: frame.id, timestamp: frame.timestamp,
+    capture_ms: Math.round(frame.monotonicMs), mimeType: frame.mimeType, step: 2 });
+  assert.deepEqual(Buffer.from(image.data, 'base64'), frame.data);
+  assert.deepEqual(frameInfo(frame).displayBounds, frame.displayBounds);
+});
+
 test('input validates the entire sequence before execution', () => {
   assert.throws(() => validateSequence([{ type: 'click', x: 960, y: 0 }], 960, 720), /outside/);
   assert.throws(() => validateSequence([{ type: 'key', key: 'Meta+L' }], 960, 720), /Unsupported/);
-  assert.throws(() => validateSequence(Array.from({ length: 3 }, () => ({ type: 'wait', milliseconds: 10000 })), 960, 720), /budget/);
+  assert.throws(() => validateSequence(Array.from({ length: 3 }, () => ({ type: 'wait', ms: 10000 })), 960, 720), /budget/);
   assert.equal(validateSequence([{ type: 'click', x: 100, y: 100 }], 960, 720)[0].hold_ms, 80);
 });
 

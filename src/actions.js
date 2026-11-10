@@ -13,7 +13,7 @@ export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('key'), key: z.string().min(1).max(40).describe(
     'One letter/digit, F1-F12, ArrowUp/Down/Left/Right, Enter, Escape, Space, Tab, Backspace, Delete, Home, End, PageUp/Down, Shift, Control or Alt. Named keys are case-sensitive; use Space, not SPACE. No shortcut combinations.'),
     hold_ms: z.number().int().min(0).max(5000).default(80) }).strict(),
-  z.object({ type: z.literal('wait'), milliseconds: z.number().int().min(0).max(10000) }).strict(),
+  z.object({ type: z.literal('wait'), ms: z.number().int().min(0).max(10000) }).strict(),
   z.object({ type: z.literal('pause') }).strict(),
   z.object({ type: z.literal('resume') }).strict(),
   z.object({ type: z.literal('wait_ticks'), ticks: z.number().int().min(1).max(120) }).strict(),
@@ -37,7 +37,7 @@ export function validateSequence(rawActions, width, height) {
     if (action.type === 'key' && !/^(?:[a-zA-Z0-9]|F(?:[1-9]|1[0-2])|Arrow(?:Up|Down|Left|Right)|Enter|Escape|Space|Tab|Backspace|Delete|Home|End|PageUp|PageDown|Shift|Control|Alt)$/.test(action.key)) {
       throw new Error('Unsupported gameplay key; browser shortcuts and key combinations are not allowed');
     }
-    milliseconds += action.type === 'wait' ? action.milliseconds : 'hold_ms' in action
+    milliseconds += action.type === 'wait' ? action.ms : 'hold_ms' in action
       ? action.hold_ms * (action.type === 'drag' ? 2 : action.count || 1) : 0;
   }
   if (milliseconds > 20000) throw new Error('Sequence exceeds the 20 second input/wait budget');

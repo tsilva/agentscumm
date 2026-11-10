@@ -10,7 +10,8 @@ import { FrameHistory } from './history.js';
 import { ACTION_TIMEOUT_MS, nativeActions, SerialQueue, validateSequence } from './actions.js';
 import { SpectatorViewer } from './viewer.js';
 import { installHealthObserver, readShellState, bounded } from './health.js';
-import { installDisplayObserver, displayBounds, captureBounds } from './display.js';
+import { fixedGameCrop } from './display.js';
+import { shortId } from './ids.js';
 import { claimDataDir } from './instances.js';
 import { readLibrary, validateZipPaths, importZipFiles, saveLibrary, launchReattachedGame } from './library.js';
 import { enableEvaluation, readEvaluation, RunEvaluation } from './evaluation.js';
@@ -142,7 +143,8 @@ export class GameRuntime {
 
   async listGames() {
     const local = (await readLibrary(this.dataDir)).games;
-    return [...games.filter(game => !local.some(item => item.slug === game.slug)), ...local];
+    return [...games.filter(game => !local.some(item => item.slug === game.slug)), ...local]
+      .map(game => fixedGameCrop(game.slug, this.dimensions) ? game : { ...game, launchable: false });
   }
 
   async library({ operation = 'status', paths } = {}) {
@@ -188,6 +190,12 @@ export class GameRuntime {
       if (this.closing) throw new Error('Runtime is shutting down');
       if (this.libraryImport?.state === 'importing') throw new Error('Wait for the library import to finish');
       if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(game)) throw new Error('Game must be a ScummWEB catalog slug');
+      const crop = fixedGameCrop(game, this.dimensions);
+      if (!crop) {
+        const error = new Error(`Define a fixed bounding box in AgentSCUMM before launching "${game}"`);
+        error.toolDetails = { code: 'GAME_CROP_REQUIRED', game };
+        throw error;
+      }
       if (this.game === game && ['loading', 'ready'].includes(this.phase) && !restart) {
         if (runId && runId !== this.runId) throw new Error('A different run is active; close it or request a restart');
         return this.status();
@@ -197,12 +205,13 @@ export class GameRuntime {
       this.importedGame = (await readLibrary(this.dataDir)).games.find(item => item.slug === game);
       this.sessionEvaluation = undefined;
       this.launchMode = mode;
-      this.sessionId = randomUUID();
+      this.sessionId = shortId();
       this.runId = runId ?? this.defaultRunId ?? (mode === 'continue' ? undefined : randomUUID());
       this.saveScope = this.runId && createHash('sha256').update(JSON.stringify([this.runId, game])).digest('hex');
       this.agentControls = undefined;
       this.nativeControlReason = undefined;
       this.game = game;
+      this.fixedCrop = crop;
       this.phase = 'loading';
       this.bootPhase = 'starting-browser';
       this.message = null;
@@ -314,7 +323,6 @@ export class GameRuntime {
     await page.exposeBinding('__agentscummGetSoundEnabled', () => this.soundEnabled);
     await page.addInitScript(installAudioControl);
     await page.addInitScript(installHealthObserver);
-    await page.addInitScript(installDisplayObserver);
     if (this.evaluation || progressProvider?.telemetry === 'events') {
       await page.addInitScript(enableEvaluation);
     }
@@ -459,32 +467,21 @@ export class GameRuntime {
       if (!this.page || this.page.isClosed()) throw new Error('No connected game page');
       const sessionId = this.sessionId;
       const phase = this.phase;
-      const geometry = phase === 'ready' ? await this.gameGeometry() : null;
-      const clip = geometry?.captureBounds;
+      const clip = phase === 'ready' ? this.fixedCrop : undefined;
       const data = await this.page.screenshot({ type: 'jpeg', quality: 90, scale: 'css', timeout: 3000,
         ...(clip ? { clip } : {}) });
       if (sessionId !== this.sessionId) throw new Error('Session changed during capture');
       const metadata = { sessionId, game: this.game, phase, reason,
         width: clip?.width ?? this.dimensions.width, height: clip?.height ?? this.dimensions.height,
-        canvasBounds: geometry ? { ...geometry.canvasBounds, x: geometry.canvasBounds.x - clip.x,
-          y: geometry.canvasBounds.y - clip.y } : null,
         displayBounds: clip ? { x: 0, y: 0, width: clip.width, height: clip.height } : null,
         captureBounds: clip ?? null, actionId: this.currentActionId || null,
         step: this.currentStep ?? null };
       if (phase === 'ready' && this.phase === 'ready') return this.history.add(data, metadata);
       // Startup checks and explicit loading/error observations never enter the rolling buffer.
-      return { ...metadata, id: `unbuffered-${randomUUID()}`, timestamp: new Date().toISOString(),
+      return { ...metadata, id: shortId(), timestamp: new Date().toISOString(),
         monotonicMs: performance.now(), mimeType: 'image/jpeg', data };
     })();
     try { return await this.captureTask; } finally { this.captureTask = null; }
-  }
-
-  async gameGeometry() {
-    const canvasBounds = await this.canvas.boundingBox();
-    if (!canvasBounds) throw new Error('Game canvas is not visible');
-    const rendered = await bounded(this.canvas.evaluate(displayBounds, canvasBounds),
-      3000, 'Game renderer did not respond during capture');
-    return { canvasBounds, captureBounds: captureBounds(rendered, this.dimensions) };
   }
 
   async waitReady(timeoutMs = 25000) {
@@ -573,12 +570,18 @@ export class GameRuntime {
     }
   }
 
-  async act({ session_id: sessionId, request_id: requestId, actions: rawActions, frame_id: frameId }, signal) {
+  requestResult(sessionId, requestId) {
+    if (sessionId !== this.sessionId) throw new Error('Session ID does not match the current game');
+    return this.requests.get(requestId)?.result ??
+      { state: this.usedRequestIds.has(requestId) ? 'expired' : 'unknown' };
+  }
+
+  async act({ session_id: sessionId, request_id: requestId, actions: rawActions }, signal) {
     const requestSignal = AbortSignal.any([this.shutdownSignal.signal,
       ...(signal ? [signal] : []), ...(this.evaluation ? [this.evaluation.signal.signal] : [])]);
     return this.queue.run(async () => {
       if (sessionId !== this.sessionId) throw new Error('Session ID does not match the current game');
-      const fingerprint = createHash('sha256').update(JSON.stringify({ rawActions, frameId })).digest('hex');
+      const fingerprint = createHash('sha256').update(JSON.stringify(rawActions)).digest('hex');
       const cached = this.requests.get(requestId);
       if (cached) {
         if (cached.fingerprint !== fingerprint) throw new Error('Request ID was already used for different inputs');
@@ -588,12 +591,7 @@ export class GameRuntime {
       if (this.usedRequestIds.size >= 10000) throw new Error('Session request limit reached; close and relaunch before further input');
       requestSignal.throwIfAborted();
       await this.assertReady(sessionId);
-      const box = (await this.gameGeometry()).captureBounds;
-      if (frameId) {
-        const frame = this.history.get(frameId);
-        if (!frame || frame.sessionId !== sessionId || frame.phase !== 'ready') throw new Error('Observation expired or belongs to another session; observe again');
-        if (JSON.stringify(frame.captureBounds) !== JSON.stringify(box)) throw new Error('Game display geometry changed; observe again before issuing input');
-      }
+      const box = this.fixedCrop;
       const actions = validateSequence(rawActions, box.width, box.height);
       if (actions.some(action => nativeActions.has(action.type))) {
         await this.probeNativeControls();
@@ -608,7 +606,7 @@ export class GameRuntime {
           throw new Error(`Save ID exceeds this game's maximum slot (${this.agentControls.maxSaveSlot})`);
         }
       }
-      const actionId = randomUUID();
+      const actionId = shortId();
       const record = { actionId, requestId, state: 'running', completed: 0, total: actions.length,
         startedAt: new Date().toISOString(),
         steps: actions.map(({ type }, index) => ({ index, type, state: 'pending' })) };
@@ -656,9 +654,6 @@ export class GameRuntime {
             step.control = await this.executeNative(action, nativeDeadline, inputSignal);
             step.state = 'delivered';
           } else {
-            if ('x' in action && JSON.stringify((await this.gameGeometry()).captureBounds) !== JSON.stringify(box)) {
-              throw new Error('Game display geometry changed during the sequence; observe again before issuing input');
-            }
             await this.canvas.focus();
             await this.execute(action, box, inputSignal);
             if (deferredResume) {
@@ -739,7 +734,7 @@ export class GameRuntime {
     const page = this.page;
     const move = (x, y, steps = 1) => page.mouse.move(box.x + x, box.y + y, { steps });
     if (action.type === 'move') await move(action.x, action.y);
-    if (action.type === 'wait') await sleep(action.milliseconds, undefined, { signal });
+    if (action.type === 'wait') await sleep(action.ms, undefined, { signal });
     if (action.type === 'click') {
       await move(action.x, action.y);
       signal.throwIfAborted();

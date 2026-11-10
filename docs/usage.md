@@ -181,7 +181,7 @@ An ownership guard rejects a second game launch against a live instance's data d
 
 | Tool | Behavior |
 | --- | --- |
-| `list_games` | Lists known catalog slugs, intro-checkpoint support, and this instance’s imported games. Future catalog slugs can also be launched. |
+| `list_games` | Lists known catalog slugs, intro-checkpoint support, and this instance’s imported games. Entries with `launchable: false` need a fixed crop. |
 | `library` | `operation="import"` accepts 1–256 absolute local ZIP `paths` and starts an asynchronous import job. Poll `operation="status"` for the site’s results. Close an active game before importing. |
 | `session` | Operations are `start`, `close`, `open_viewer`, and `close_viewer`. Start accepts `game` (default Flight of the Amazon Queen), `mode` (`skip_intro`, `beginning`, `continue`, default `skip_intro`), and `restart` (default false). It returns a session ID immediately and reuses the active game unless restart is explicit. `close` ends the game and clears history while preserving saves and cache. `close_viewer` requires the active `session_id` after startup and closes the read-only spectator while preserving the game and history. |
 | `status` | Checks renderer/runtime health and reports startup phase, connection, capture health, history coverage, spectator and recent actions. Optional `wait_ms` (0–25000, default 0) waits while loading; repeat until ready or an error. |
@@ -193,6 +193,8 @@ Start with `session(operation="start", game="...")`, poll `status(wait_ms=10000)
 The session and observation tools replace the former names: `launch_game` → `session(operation="start")`, `close_game` → `session(operation="close")`, `open_viewer` → `session(operation="open_viewer")`, `session_status` → `status()`, `wait_for_ready(timeout_ms=N)` → `status(wait_ms=N)`, `get_frame(frame_id=ID)` → `observe(source="frames", frame_ids=[ID])`, and `review(...)` → `observe(source="history", ...)`. The old tool names are not registered. Reconnect clients to a newly started server to discover the current schemas; changing source files does not update an already running server.
 
 Flight of the Amazon Queen is the default game. The MCP provides the interface; Codex handles gameplay through the Play Game skill below.
+
+A game needs a [fixed bounding box](../src/display.js) to launch. Elvira II and Flight of the Amazon Queen are configured. With the default `960 × 720` viewport, their box begins at `(154, 115)` and measures `651 × 490` pixels. Custom viewport sizes use the whole viewport. A missing definition returns `GAME_CROP_REQUIRED` before AgentSCUMM opens or replaces a session.
 
 ## Import local games
 
@@ -215,9 +217,7 @@ site finished scanning; inspect `summary` and `items` for individual errors and 
 copies. The server uses ScummWEB’s normal game ZIP input and its existing scanner and duplicate
 handling. It does not extract game files itself or upload ZIPs to a server.
 
-Imported entries appear in `list_games` with `source: "local_import"`. Launch their returned `slug`
-with `session(operation="start", game="...")`; all games use `/<slug>/play` on the configured
-base URL. If that route requests local files,
+Imported entries appear in `list_games` with `source: "local_import"`. An entry with `launchable: false` needs a fixed AgentSCUMM crop before launch. Start an eligible imported game by passing its returned `slug` to `session`. All games use `/<slug>/play` on the configured base URL. If that route requests local files,
 the server reattaches the registered ZIPs through its importer and activates the route’s
 Play or Continue action. It never navigates through homepage cards or assumes that a
 game title appears in the launch button’s accessible name. Imported games do not
@@ -287,19 +287,18 @@ python3 -B -m unittest discover -s .agents/skills/agentscumm_price-thread/tests 
 
 ### Input and sequences
 
-Coordinates use **CSS pixels relative to the returned screenshot**. Ready-game screenshots contain only the rendered game area, without viewport borders or the web cursor-grab prompt. Their dimensions can change with game resolutions and menus. The hidden viewport defaults to **960 × 720**, with device scale factor 1; input coordinates are translated through the crop offset automatically. Each observation reports its actual `width` and `height`, screenshot-relative `canvasBounds` and `displayBounds`, and the viewport-relative `captureBounds`. Status reports current screenshot `dimensions` separately from `viewportDimensions`. Loading/error observations remain full-viewport diagnostics and are not input references. Pass `frame_id` to reject input based on an observation whose crop geometry has changed. A geometry change during a sequence stops subsequent coordinate inputs; observe again before submitting a new sequence.
+Coordinates use **CSS pixels relative to the returned JPEG**. Its top-left pixel is `(0, 0)`. AgentSCUMM adds the fixed crop offset before sending input. The JPEG carries its own dimensions, and actions require no frame reference. Loading and error observations are full-viewport diagnostics.
 
-Example `act` arguments, using IDs returned by `session(operation="start")` and `observe`:
+Example `act` arguments, using the session ID from `session(operation="start")` and a new client request ID:
 
 ```json
 {
-  "session_id": "00000000-0000-4000-8000-000000000001",
-  "request_id": "inspect-center-1",
-  "frame_id": "frame-12",
+  "session_id": "QZ7mK3tV2pA",
+  "request_id": "F4nRq8D1zUw",
   "actions": [
     { "type": "move", "x": 480, "y": 360 },
     { "type": "click", "x": 480, "y": 360, "button": "left" },
-    { "type": "wait", "milliseconds": 800 },
+    { "type": "wait", "ms": 800 },
     { "type": "screenshot" }
   ]
 }
@@ -313,7 +312,7 @@ Supported actions:
 - `drag`: `from_x`, `from_y`, `x`, `y`, optional `button`, `steps`, and `hold_ms`
   (0–1000, default 150). The mouse stays down at the source before moving and at the
   target before release for `hold_ms` each. Both holds count toward the 20-second budget.
-- `wait`: `milliseconds` (0–10000).
+- `wait`: `ms` (0–10000).
 - `pause` and `resume`: explicitly hold or release native game updates. Repeating either is safe.
 - `wait_ticks`: `ticks` (1–120). Advance that many engine updates or runtime frame presentations, then hold.
 - `save` and `load`: integer `id` (1 through `status.agentControls.maxSaveSlot`), a native save slot in the current run.
@@ -321,13 +320,13 @@ Supported actions:
 
 Sequences have at most 32 steps, including up to eight screenshots, and a 20-second combined input hold and wait budget. The server validates the whole sequence before input starts. Accepted sequences run serially and stop at the first error. Use an explicit `wait` step for delays within a sequence.
 
-An accepted batch returns one final receipt with one outcome per requested step. The receipt labels steps left over after a failure or cancellation as `skipped`. A successful `screenshot` step reports `captured` and links its image and metadata by frame ID. Frames include a wall-clock `timestamp` and `monotonicMs` at capture completion. Compare `monotonicMs` within the same server process to measure elapsed time between captures. The image list follows step order. Only explicit screenshot steps return images, and a partial result retains captures that succeeded. End the batch with a screenshot step when you need to inspect the final scene. For a hover survey, submit `move → wait → screenshot → move → wait → screenshot` in one call.
+A batch reply contains ordered `steps`. An empty object means the step completed normally. A native control reports its `control` result. A screenshot step reports `frame_id` and `capture_ms` and contributes one JPEG after the receipt. Image order follows screenshot step order. `capture_ms` is a monotonic timestamp for comparing frames from the same running server. The JPEG carries its dimensions.
 
-Wait on the original call for its receipt. The shared server gives an accepted batch 50 seconds to execute, then requests cancellation of its remaining work. When it can unwind, it returns the partial receipt with `ACTION_TIMEOUT`. The local client waits up to 60 seconds for the reply. Allow the full reply window in the calling host. These deadlines apply across games.
+A failed batch includes an error and labels unfinished steps, such as `skipped` or `delivery-uncertain`. The browser can receive an input without the game performing the intended action. End the batch with a screenshot when you need to check what the game did.
 
-If the reply is missing, check `status.recentActions` for the original request ID and take a fresh observation before sending new input. For a known accepted request, replaying the same ID with identical arguments on the same session returns the cached receipt and images. The server caches the last 100 results and rejects older used IDs. A request that never reached the server can execute on resubmission. A new launch creates a new session ID and clears request history.
+Wait on the original call for its receipt. When the server's 50-second deadline stops the batch, it returns `{"error":"ACTION_TIMEOUT"}`. The local client waits up to 60 seconds. If the reply is missing or you need details after a timeout, call `status` with `session_id` and `request_id`. Add `include_images: true` to recover the batch's explicit captures. An `unknown` request has no recorded attempt. An `expired` request was used but its receipt has left the cache.
 
-Results distinguish captured screenshots, delivered inputs and uncertain delivery and include partial completion if a sequence fails. Delivered means the browser accepted the input operation, not that the game completed the intended action. Inspect the returned screenshot or history before deciding what to do next. MCP cancellation interrupts explicit waits and key holds and stops the remaining sequence; already delivered input is not undone. The same request ID continues to identify that attempt.
+The server keeps the last 100 receipts within the current game session. Reusing the same request ID with identical actions returns the cached reply and sets `replayed: true`. For a request that never reached the server, resubmission can execute it. Use a new request ID for new input. Session and frame IDs are short random handles. The local client generates a short random request ID when omitted and reports it with the reply. A new game launch creates a new session ID and clears its request history.
 
 ### Native game time and saves
 
@@ -349,7 +348,7 @@ Periodic capture starts only when the game reaches `ready`, then runs independen
 
 Use `observe(source="history")` with `seconds` and `count`, then `observe(source="frames", frame_ids=[...])` for retained frame IDs. Frames carry timestamps, game/session IDs, and action/step associations. Buffer data stays in memory and expires. Changing or closing the game clears it. Cached action results retain their explicit captures even after rolling-buffer eviction.
 
-The viewer serves screenshots and status from a loopback HTTP endpoint, with a separate local sound toggle. Its window is separate from the hidden game, so viewer clicks, keyboard input, resizing, and closure cannot change game input or viewport dimensions. It displays the same game-only frames returned by MCP observations and action captures, using their screenshot-relative `displayBounds`. The server observes onscreen WebGL draw clipping and viewports to remove padding inside the renderer as well as outside the canvas. It does not trim pixels by brightness, so dark scenes retain their geometry. Full-output menus and overlays expand the crop when they draw outside the game area. The native window follows the resulting aspect ratio as games, menus, or resolutions change and stays within the visible desktop. ScummWEB's web-player menu, exit, fullscreen, touch-control overlays, and cursor-grab prompt are hidden in the owned session. A compact footer shows **Actions:** followed by the number of accepted action sequences in the current game session. Each new `act` sequence counts once, including sequences that later fail; cached retries and rejected inputs do not increment it. The counter resets when a new game session starts and stays outside game screenshots. A **Sound off / Sound on** button sits at the bottom-right of the footer. Game sound is off by default for each new session; enabling it plays ScummVM audio on the machine running AgentSCUMM. The setting lasts for that game session, including reopening the spectator. Muting changes output gain without pausing the audio clock or issuing game input. Audio is not streamed to remote spectators or saved in frame history. There are no spectator headers or added letterboxing; full status remains available through MCP. Fresh images, explicit action captures, cached replay, and visual history share this crop and coordinate space. On macOS, AppKit keeps the resizable content area at the game's aspect ratio and owns the window title and Dock icon, while a WebKit view with an ephemeral data store displays the game-only spectator page. Other platforms use a separate Chromium app window. The viewer exposes no game-input endpoint; its same-origin sound endpoint only changes local audio output.
+The viewer serves screenshots and status from a loopback HTTP endpoint, with a separate local sound toggle. Its window is separate from the hidden game, so viewer clicks, keyboard input, resizing, and closure cannot change game input or viewport dimensions. It displays the same game-only frames returned by MCP observations and action captures, using their screenshot-relative `displayBounds`. The spectator uses the same fixed rectangle as MCP screenshots and inputs. Notifications and game effects leave that rectangle in place. The native window follows the resulting aspect ratio as games, menus, or resolutions change and stays within the visible desktop. ScummWEB's web-player menu, exit, fullscreen, touch-control overlays, and cursor-grab prompt are hidden in the owned session. A compact footer shows **Actions:** followed by the number of accepted action sequences in the current game session. Each new `act` sequence counts once, including sequences that later fail; cached retries and rejected inputs do not increment it. The counter resets when a new game session starts and stays outside game screenshots. A **Sound off / Sound on** button sits at the bottom-right of the footer. Game sound is off by default for each new session; enabling it plays ScummVM audio on the machine running AgentSCUMM. The setting lasts for that game session, including reopening the spectator. Muting changes output gain without pausing the audio clock or issuing game input. Audio is not streamed to remote spectators or saved in frame history. There are no spectator headers or added letterboxing; full status remains available through MCP. Fresh images, explicit action captures, cached replay, and visual history share this crop and coordinate space. On macOS, AppKit keeps the resizable content area at the game's aspect ratio and owns the window title and Dock icon, while a WebKit view with an ephemeral data store displays the game-only spectator page. Other platforms use a separate Chromium app window. The viewer exposes no game-input endpoint; its same-origin sound endpoint only changes local audio output.
 
 ### Loading, recovery, and storage
 

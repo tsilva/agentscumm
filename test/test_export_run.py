@@ -653,6 +653,28 @@ class ExportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "conflicting screenshot"):
             self.export()
 
+    def test_compact_action_receipt_preserves_image_order_and_short_session(self):
+        rows = fixture()
+        session = "QZ7mK3tV2pA"
+        frames = [{"frame_id": "P8aY3hJ6q0Q", "capture_ms": 125},
+                  {"frame_id": "F4nRq8D1zUw", "capture_ms": 251}]
+        item = rows[6]["payload"]["item"]
+        item["arguments"]["session_id"] = session
+        item["arguments"]["actions"] = [{"type": "screenshot"}, {"type": "click"}, {"type": "screenshot"}]
+        image = {"type": "image", "mimeType": "image/png", "data": PNG}
+        other = {**image, "data": base64.b64encode(b"second frame").decode()}
+        item["result"]["content"][0]["text"] = json.dumps({"content": [
+            {"type": "text", "text": json.dumps({"steps": [frames[0], {}, frames[1]]})}, image, other]})
+        rows.pop(8)
+        self.source(rows)
+        path, stats = self.export()
+        self.assertEqual(stats["screenshots"]["original_frame_ids"], 2)
+        index = json.loads((path / "screenshots" / "index.json").read_text())
+        aliases = [frame for entry in index["screenshots"] for frame in entry["frames"]]
+        self.assertCountEqual(aliases, [
+            {"id": frames[0]["frame_id"], "sessionId": session, "step": 0, "capture_ms": 125},
+            {"id": frames[1]["frame_id"], "sessionId": session, "step": 2, "capture_ms": 251}])
+
     def test_frame_ids_from_distinct_sessions_are_kept(self):
         rows = fixture()
         other = {"id": "frame-42", "sessionId": "another-session", "mimeType": "image/png", "width": 1}

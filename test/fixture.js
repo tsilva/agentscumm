@@ -28,6 +28,7 @@ export function createTracker(game, revision) {
 
 export async function startFixture({ navigationDelay = 0, startupDelay = 600, documentDelay = 0, library = false, libraryContinue = false, evaluation = false, telemetry = false, nativeControls = false, archiveUpdates = 0, archiveComplete = false, archiveMountMs = 0 } = {}) {
   const requests = [];
+  const gameModes = new Map();
   const server = http.createServer((request, response) => {
     requests.push(request.url);
     if (evaluation === 'progress') {
@@ -159,13 +160,13 @@ export async function startFixture({ navigationDelay = 0, startupDelay = 600, do
         setTimeout(() => response.end(html.replace('<!doctype html>', '')), documentDelay);
       } else response.end(html);
     } else if (/^\/[a-z0-9-]+\/play/.test(request.url)) {
-      const mode = request.url.includes('broken') ? 'error' : request.url.includes('fallback') ? 'fallback' : request.url.includes('abort-on-click') ? 'abort-on-click' : 'normal';
+      const mode = gameModes.get(request.url.split('/')[1]) ?? 'normal';
       const query = new URL(request.url, 'http://fixture').searchParams;
       const saveScope = nativeControls ? query.get('agentSaveScope') : null;
       setTimeout(() => response.end(`<!doctype html><html><style>body{margin:0}iframe{display:block;width:100vw;height:100vh;border:0}</style>
         <div class="game-route-controls" style="position:fixed;inset:0 0 auto;height:64px;background:magenta;z-index:10"><button>Exit game</button><button>Fullscreen</button></div>
         <div class="game-route-bottom-actions" style="position:fixed;bottom:0;z-index:10"><button>Skip intro</button></div>
-        ${request.url.includes('failed-download') ? '<div data-launch-overlay-state="error"><p data-launch-status>Could not download the game ZIP</p></div>' : ''}
+        ${mode === 'failed-download' ? '<div data-launch-overlay-state="error"><p data-launch-status>Could not download the game ZIP</p></div>' : ''}
         ${archiveUpdates ? `<div id="archive" data-launch-overlay-state="visible" data-launch-archive-bytes="0">Downloading game</div>
         <script>
           const archive = document.getElementById('archive');
@@ -178,9 +179,9 @@ export async function startFixture({ navigationDelay = 0, startupDelay = 600, do
             }
           }, 200);
         </script>` : ''}
-        <iframe data-scummvm-route-frame="true" src="/scummvm.html?mode=${mode}${request.url.includes('identity-only') ? '&identityOnly' : ''}${query.get('telemetry') === '1' ? '&telemetry=1' : ''}${saveScope ? '&agentSaveScope=' + encodeURIComponent(saveScope) : ''}"></iframe></html>`), navigationDelay);
+        <iframe data-scummvm-route-frame="true" src="/scummvm.html?mode=${mode}${mode === 'identity-only' ? '&identityOnly' : ''}${query.get('telemetry') === '1' ? '&telemetry=1' : ''}${saveScope ? '&agentSaveScope=' + encodeURIComponent(saveScope) : ''}"></iframe></html>`), navigationDelay);
     } else response.writeHead(404).end('Not found');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  return { requests, url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise(resolve => server.close(resolve)) };
+  return { requests, setGameMode: (game, mode) => gameModes.set(game, mode), url: `http://127.0.0.1:${server.address().port}`, close: () => new Promise(resolve => server.close(resolve)) };
 }

@@ -9,8 +9,31 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import packageMetadata from '../package.json' with { type: 'json' };
 import { startFixture } from './fixture.js';
 
+test('stdio MCP requires a fixed crop before launching and accepts crop-relative coordinates', async t => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-crop-required-'));
+  const client = new Client({ name: 'crop-required-test', version: '1.0' });
+  t.after(async () => { await client.close(); await rm(dataDir, { recursive: true, force: true }); });
+  await client.connect(new StdioClientTransport({ command: process.execPath,
+    args: ['src/index.js', '--no-viewer', '--data-dir', dataDir] }));
+  const call = (name, args = {}) => client.callTool({ name, arguments: args });
+  const { games } = JSON.parse((await call('list_games')).content[0].text);
+  assert.equal(games.find(game => game.slug === 'beneath-a-steel-sky').launchable, false);
+  assert.notEqual(games.find(game => game.slug === 'flight-of-the-amazon-queen').launchable, false);
+  const rejected = await call('session', { operation: 'start', game: 'beneath-a-steel-sky' });
+  assert.equal(rejected.isError, true);
+  const error = JSON.parse(rejected.content[0].text);
+  assert.equal(error.code, 'GAME_CROP_REQUIRED');
+  assert.match(error.error, /fixed bounding box/);
+  assert.equal(error.status.phase, 'idle');
+  assert.equal(error.status.connected, false);
+  const { tools } = await client.listTools();
+  const schema = tools.find(tool => tool.name === 'act').inputSchema;
+  assert.deepEqual(Object.keys(schema.properties).sort(), ['actions', 'request_id', 'session_id']);
+});
+
 test('opt-in telemetry queries unmapped games without leaking state into player tools', { timeout: 30000 }, async t => {
   const fixture = await startFixture({ telemetry: true, startupDelay: 1500 });
+  fixture.setGameMode('elvira-ii-the-jaws-of-cerberus', 'identity-only');
   const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-telemetry-'));
   const client = new Client({ name: 'telemetry-test', version: '1.0' });
   t.after(async () => { await client.close(); await fixture.close(); await rm(dataDir, { recursive: true, force: true }); });
@@ -25,7 +48,7 @@ test('opt-in telemetry queries unmapped games without leaking state into player 
     assert.ok(!result.isError, result.content[0].text);
     return JSON.parse(result.content[0].text);
   };
-  const { sessionId: session_id } = await read('session', { operation: 'start', game: 'unmapped' });
+  const { sessionId: session_id } = await read('session', { operation: 'start' });
   assert.equal((await read('telemetry', { session_id })).state, 'pending');
   const status = await read('status', { wait_ms: 10000 });
   assert.equal(status.phase, 'ready');
@@ -33,7 +56,7 @@ test('opt-in telemetry queries unmapped games without leaking state into player 
   assert.deepEqual(status.sourceRevision.mcp_tools, tools.map(tool => tool.name).sort());
   assert.doesNotMatch(JSON.stringify(status), /room_id|game_identity|sample_time_ms/);
   const metadata = await read('telemetry', { session_id });
-  assert.deepEqual(metadata, { session_id, game: 'unmapped', game_identity: { engine_id: 'fixture', game_id: 'unmapped' },
+  assert.deepEqual(metadata, { session_id, game: 'flight-of-the-amazon-queen', game_identity: { engine_id: 'fixture', game_id: 'unmapped' },
     state: 'available', room: { id: 17, sample_time_ms: 123 },
     banks: [{ name: 'vars', length: 5 }, { name: 'globals', length: 2, keyed: true }] });
   assert.deepEqual((await read('telemetry', { session_id, bank: 'globals', limit: 1 })).selection,
@@ -49,7 +72,7 @@ test('opt-in telemetry queries unmapped games without leaking state into player 
   assert.equal(changed.room.id, 18);
   assert.deepEqual(changed.selection.values, [4, null]);
 
-  const replacement = await read('session', { operation: 'start', game: 'identity-only' });
+  const replacement = await read('session', { operation: 'start', game: 'elvira-ii-the-jaws-of-cerberus' });
   assert.equal((await call('telemetry', { session_id })).isError, true);
   assert.equal((await read('status', { wait_ms: 10000 })).phase, 'ready');
   const unavailable = await read('telemetry', { session_id: replacement.sessionId });
@@ -86,16 +109,14 @@ test('stdio MCP batches native pause, save, resume and load with input and scree
   const args = { session_id, request_id: 'native-checkpoint-and-restore', actions };
   const result = await call('act', args);
   assert.ok(!result.isError, result.content[0].text);
-  const { action, screenshots } = JSON.parse(result.content[0].text);
-  assert.equal(action.state, 'completed');
-  assert.equal(action.completed, actions.length);
-  assert.deepEqual(action.steps.map(step => step.type), actions.map(step => step.type));
-  assert.deepEqual(action.steps.map(step => step.control), [
+  const { steps } = JSON.parse(result.content[0].text);
+  assert.equal(steps.length, actions.length);
+  assert.deepEqual(steps.map(step => step.control), [
     { tick: 0, paused: true }, { tick: 0, paused: true }, { tick: 1, paused: false },
     undefined, { tick: 1, paused: true }, undefined, { tick: 0, paused: true },
     undefined, { tick: 0, paused: false },
   ]);
-  assert.deepEqual(screenshots.map(frame => frame.step), [5, 7]);
+  assert.deepEqual(steps.flatMap((step, index) => step.frame_id ? [index] : []), [5, 7]);
   assert.equal(result.content.filter(item => item.type === 'image').length, 2);
   assert.equal((await read('act', args)).replayed, true);
   assert.equal((await read('status')).actionSequences, 1);
@@ -130,7 +151,7 @@ test('stdio MCP steps timing-only engines and rejects unsupported saves before i
     { type: 'click', x: 50, y: 50 }, { type: 'pause' },
   ] });
   assert.ok(!stepped.isError, stepped.content[0].text);
-  assert.deepEqual(read(stepped).action.steps.map(step => step.control), [
+  assert.deepEqual(read(stepped).steps.map(step => step.control), [
     { tick: 0, paused: true }, { tick: 3, paused: true }, { tick: 3, paused: false },
     undefined, { tick: 4, paused: true },
   ]);
@@ -138,6 +159,7 @@ test('stdio MCP steps timing-only engines and rejects unsupported saves before i
 
 test('stdio MCP returns actual images, sequence outcomes and history', { timeout: 40000 }, async t => {
   const fixture = await startFixture();
+  fixture.setGameMode('elvira-ii-the-jaws-of-cerberus', 'abort-on-click');
   const dataDir = await mkdtemp(path.join(tmpdir(), 'agentscumm-mcp-'));
   const client = new Client({ name: 'agentscumm-integration-test', version: '1.0' });
   t.after(async () => { await client.close(); await fixture.close(); await rm(dataDir, { recursive: true, force: true }); });
@@ -181,10 +203,10 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
   assert.equal(observed.content[1].mimeType, 'image/jpeg');
   assert.equal(frame.source, 'fresh');
   assert.ok(Buffer.from(observed.content[1].data, 'base64').length > 1000);
-  const action = await call('act', { session_id: launch.sessionId, request_id: 'mcp-click', frame_id: frame.id,
-    actions: [{ type: 'click', x: 100, y: 100 }, { type: 'wait', milliseconds: 400 }] });
+  const action = await call('act', { session_id: launch.sessionId, request_id: 'mcp-click',
+    actions: [{ type: 'click', x: 100, y: 100 }, { type: 'wait', ms: 400 }] });
   assert.equal(action.isError, false);
-  assert.equal(JSON.parse(action.content[0].text).action.completed, 2);
+  assert.deepEqual(JSON.parse(action.content[0].text), { steps: [{}, {}] });
   assert.equal(action.content.length, 1, 'Input-only batches return a receipt without an image');
   const review = await call('observe', { source: 'history', seconds: 10, count: 3 });
   assert.ok(review.content.some(item => item.type === 'image'));
@@ -198,23 +220,24 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
   assert.equal(viewerStatus.phase, 'ready');
   assert.equal((await call('observe', { source: 'frames', frame_ids: [frame.id] })).content[1].type, 'image');
   const capturesRequest = { session_id: launch.sessionId, request_id: 'hover-survey',
-    actions: [{ type: 'move', x: 100, y: 100 }, { type: 'wait', milliseconds: 100 }, { type: 'screenshot' },
+    actions: [{ type: 'move', x: 100, y: 100 }, { type: 'wait', ms: 100 }, { type: 'screenshot' },
       { type: 'move', x: 200, y: 200 }, { type: 'screenshot' }] };
   const captures = await call('act', capturesRequest);
   const captureResult = JSON.parse(captures.content[0].text);
   assert.equal(captures.isError, false);
-  assert.deepEqual(captureResult.screenshots.map(frame => frame.step), [2, 4]);
+  assert.deepEqual(captureResult.steps.flatMap((step, index) => step.frame_id ? [index] : []), [2, 4]);
+  assert.equal(captures.content.length, 3);
   assert.equal(captures.content.filter(item => item.type === 'image').length, 2);
-  const capturesMetadata = [captures.content[1], captures.content[3]].map(item => JSON.parse(item.text));
-  assert.ok(capturesMetadata[1].monotonicMs >= capturesMetadata[0].monotonicMs);
-  assert.ok(capturesMetadata.every(item => Number.isFinite(Date.parse(item.timestamp))));
-  assert.deepEqual(capturesMetadata.map(item => item.id),
-    captureResult.action.steps.filter(step => step.type === 'screenshot').map(step => step.frameId));
-  assert.deepEqual(captureResult.action.steps.filter(step => step.type === 'screenshot').map(step => step.state), ['captured', 'captured']);
+  const [firstCapture, secondCapture] = captureResult.steps.filter(step => step.frame_id);
+  assert.match(firstCapture.frame_id, /^[A-Za-z0-9_-]{11}$/);
+  assert.ok(secondCapture.capture_ms >= firstCapture.capture_ms);
+  const recovered = await call('status', { session_id: launch.sessionId, request_id: capturesRequest.request_id, include_images: true });
+  assert.equal(JSON.parse(recovered.content[0].text).action.completed, 5);
+  assert.equal(recovered.content.filter(item => item.type === 'image').length, 2);
   const replay = await call('act', capturesRequest);
   assert.equal(JSON.parse(replay.content[0].text).replayed, true);
-  assert.deepEqual(replay.content.slice(1), captures.content.slice(1), 'Retry returns identical images');
-  const frameIds = captureResult.screenshots.map(frame => frame.frame_id).reverse();
+  assert.equal(JSON.parse((await call('status')).content[0].text).actionSequences, 2);
+  const frameIds = [secondCapture.frame_id, firstCapture.frame_id];
   const exact = await call('observe', { source: 'frames', frame_ids: frameIds });
   assert.deepEqual(exact.content.filter(item => item.type === 'text').map(item => JSON.parse(item.text).id), frameIds);
   assert.ok(exact.content.filter(item => item.type === 'text').every(item => JSON.parse(item.text).source === 'frames'));
@@ -222,7 +245,7 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
   assert.equal((await call('observe', { source: 'frames' })).isError, true);
   assert.equal((await call('observe', { source: 'fresh', count: 2 })).isError, true);
   assert.equal((await call('observe', { source: 'history', frame_ids: [frame.id] })).isError, true);
-  const actionHistory = await call('observe', { source: 'history', action_id: captureResult.action.actionId, count: 8 });
+  const actionHistory = await call('observe', { source: 'history', session_id: launch.sessionId, request_id: capturesRequest.request_id, count: 8 });
   assert.ok(JSON.parse(actionHistory.content[0].text).selectedFrames >= 2);
   const tooMany = await call('act', { session_id: launch.sessionId, request_id: 'too-many-captures',
     actions: [{ type: 'click', x: 100, y: 100 }, ...Array.from({ length: 9 }, () => ({ type: 'screenshot' }))] });
@@ -231,7 +254,7 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
   assert.equal(bad.isError, true);
   const controller = new AbortController();
   const pending = client.callTool({ name: 'act', arguments: { session_id: launch.sessionId,
-    request_id: 'cancelled-sequence', actions: [{ type: 'wait', milliseconds: 10000 }, { type: 'click', x: 200, y: 200 }] } },
+    request_id: 'cancelled-sequence', actions: [{ type: 'wait', ms: 10000 }, { type: 'click', x: 200, y: 200 }] } },
     undefined, { signal: controller.signal });
   await sleep(200);
   controller.abort();
@@ -241,7 +264,7 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
   assert.equal(resumed.content[1].type, 'image');
   const cancelled = JSON.parse((await call('status')).content[0].text).recentActions.at(-1);
   assert.equal(cancelled.state, 'failed'); assert.equal(cancelled.completed, 0);
-  const replacement = JSON.parse((await call('session', { operation: 'start', game: 'abort-on-click-game', mode: 'beginning' })).content[0].text);
+  const replacement = JSON.parse((await call('session', { operation: 'start', game: 'elvira-ii-the-jaws-of-cerberus', mode: 'beginning' })).content[0].text);
   assert.equal(JSON.parse((await call('status', { wait_ms: 10000 })).content[0].text).phase, 'ready');
   const staleClose = await call('session', { operation: 'close_viewer', session_id: launch.sessionId });
   assert.equal(staleClose.isError, true);
@@ -250,9 +273,11 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
     actions: [{ type: 'screenshot' }, { type: 'click', x: 100, y: 100 }, { type: 'screenshot' }, { type: 'click', x: 200, y: 200 }] };
   const failed = await call('act', failingRequest);
   assert.equal(failed.isError, true);
-  assert.equal(JSON.parse(failed.content[0].text).action.completed, 2);
-  assert.equal(JSON.parse(failed.content[0].text).screenshots.length, 1, 'Keep the capture made before runtime failure');
-  assert.equal(failed.content.filter(item => item.type === 'image').length, 2, 'Partial capture plus error observation');
+  const partial = JSON.parse(failed.content[0].text);
+  assert.ok(partial.error);
+  assert.ok(partial.steps[0].frame_id, 'Keep the capture made before runtime failure');
+  assert.deepEqual(partial.steps.slice(2), [{ state: 'skipped' }, { state: 'skipped' }]);
+  assert.equal(failed.content.filter(item => item.type === 'image').length, 1, 'Only the explicit capture before the error is returned');
   const failureStatus = JSON.parse((await call('status')).content[0].text);
   assert.equal(failureStatus.phase, 'error');
   assert.match(failureStatus.runtimeHealth.message, /runtime aborted/);

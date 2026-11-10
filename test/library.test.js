@@ -43,7 +43,7 @@ test('local ZIP import, site errors, instance persistence and imported game laun
   const options = { baseUrl: fixture.url, dataDir: path.join(folder, 'instance'), viewer: false };
   let runtime = new GameRuntime(options);
   t.after(async () => { await runtime.close(); await fixture.close(); await rm(folder, { recursive: true, force: true }); });
-  const zip = path.join(folder, 'Imported Adventure.zip');
+  const zip = path.join(folder, 'Elvira II The Jaws of Cerberus.zip');
   const bad = path.join(folder, 'invalid.zip');
   await writeFile(zip, 'fixture file'); await writeFile(bad, 'fixture invalid');
   await assert.rejects(validateZipPaths([]), /1–256/);
@@ -60,8 +60,8 @@ test('local ZIP import, site errors, instance persistence and imported game laun
   assert.equal(result.state, 'completed', result.error);
   assert.match(result.summary, /1 games added.*1 errors/);
   assert.equal(result.items.find(item => item.name === 'invalid.zip').message, 'Error. Invalid ZIP');
-  const entry = (await runtime.listGames()).find(game => game.slug === 'imported-adventure');
-  assert.equal(entry.title, 'Imported Adventure');
+  const entry = (await runtime.listGames()).find(game => game.slug === 'elvira-ii-the-jaws-of-cerberus');
+  assert.equal(entry.title, 'Elvira II The Jaws of Cerberus');
   assert.equal(entry.source, 'local_import');
   const saved = JSON.parse(await readFile(path.join(options.dataDir, 'local-library.json')));
   assert.deepEqual(saved.paths, [zip, bad]);
@@ -89,13 +89,13 @@ test('local ZIP import, site errors, instance persistence and imported game laun
   assert.match(runtime.shell.url(), /launch=continue/);
   assert.equal(runtime.gameUrl, `${fixture.url}/${entry.slug}/play#continue`);
   await runtime.closeGame();
-  const secondZip = path.join(folder, 'Another Adventure.zip');
+  const secondZip = path.join(folder, 'Flight of the Amazon Queen.zip');
   await writeFile(secondZip, 'second fixture');
   await runtime.library({ operation: 'import', paths: [secondZip] });
   await runtime.libraryTask;
-  await runtime.start({ game: 'another-adventure' });
+  await runtime.start({ game: 'flight-of-the-amazon-queen' });
   assert.equal((await runtime.waitReady(20000)).phase, 'ready');
-  assert.equal(new URL(runtime.gameUrl).pathname, '/another-adventure/play');
+  assert.equal(new URL(runtime.gameUrl).pathname, '/flight-of-the-amazon-queen/play');
   assert.notEqual(new URL(runtime.gameUrl).search, new URL(ready.url).search);
 });
 
