@@ -49,7 +49,7 @@ export class FrameHistory {
   }
 }
 
-export function frameInfo({ data, monotonicMs, ...metadata }) { return metadata; }
+export function frameInfo({ data, ...metadata }) { return metadata; }
 
 export function imageContent(frame) {
   return [{ type: 'text', text: JSON.stringify(frameInfo(frame)) },

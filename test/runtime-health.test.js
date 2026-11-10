@@ -56,13 +56,13 @@ test('failure during a sequence retains delivered steps, stops the rest and neve
   await runtime.canvas.evaluate(canvas => canvas.addEventListener('mousedown', () => {
     canvas.dispatchEvent(new Event('webglcontextlost'));
   }, { once: true }));
-  const request = { session_id: runtime.sessionId, request_id: 'loss-during-input', after_ms: 0,
+  const request = { session_id: runtime.sessionId, request_id: 'loss-during-input',
     actions: [{ type: 'click', x: 100, y: 100 }, { type: 'click', x: 200, y: 200 }] };
   const result = await runtime.act(request);
   assert.equal(result.action.state, 'failed');
   assert.equal(result.action.completed, 1);
   assert.equal(result.action.steps[0].state, 'delivered');
-  assert.equal(result.action.steps.length, 1);
+  assert.equal(result.action.steps[1].state, 'skipped');
   assert.match(result.action.error, /WebGL context lost/);
   assert.equal((await runtime.act(request)).replayed, true);
   assert.equal(await runtime.shell.evaluate(() => events.filter(e => e.type === 'mousedown').length), 1);

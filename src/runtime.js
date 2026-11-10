@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { FrameHistory } from './history.js';
-import { nativeActions, SerialQueue, validateSequence } from './actions.js';
+import { ACTION_TIMEOUT_MS, nativeActions, SerialQueue, validateSequence } from './actions.js';
 import { SpectatorViewer } from './viewer.js';
 import { installHealthObserver, readShellState, bounded } from './health.js';
 import { installDisplayObserver, displayBounds, captureBounds } from './display.js';
@@ -573,12 +573,12 @@ export class GameRuntime {
     }
   }
 
-  async act({ session_id: sessionId, request_id: requestId, actions: rawActions, frame_id: frameId, after_ms: afterMs = 200 }, signal) {
-    const inputSignal = AbortSignal.any([this.shutdownSignal.signal,
+  async act({ session_id: sessionId, request_id: requestId, actions: rawActions, frame_id: frameId }, signal) {
+    const requestSignal = AbortSignal.any([this.shutdownSignal.signal,
       ...(signal ? [signal] : []), ...(this.evaluation ? [this.evaluation.signal.signal] : [])]);
     return this.queue.run(async () => {
       if (sessionId !== this.sessionId) throw new Error('Session ID does not match the current game');
-      const fingerprint = createHash('sha256').update(JSON.stringify({ rawActions, frameId, afterMs })).digest('hex');
+      const fingerprint = createHash('sha256').update(JSON.stringify({ rawActions, frameId })).digest('hex');
       const cached = this.requests.get(requestId);
       if (cached) {
         if (cached.fingerprint !== fingerprint) throw new Error('Request ID was already used for different inputs');
@@ -586,7 +586,7 @@ export class GameRuntime {
       }
       if (this.usedRequestIds.has(requestId)) throw new Error('Request result expired; input will not be repeated. Observe before choosing a new action');
       if (this.usedRequestIds.size >= 10000) throw new Error('Session request limit reached; close and relaunch before further input');
-      inputSignal.throwIfAborted();
+      requestSignal.throwIfAborted();
       await this.assertReady(sessionId);
       const box = (await this.gameGeometry()).captureBounds;
       if (frameId) {
@@ -610,7 +610,8 @@ export class GameRuntime {
       }
       const actionId = randomUUID();
       const record = { actionId, requestId, state: 'running', completed: 0, total: actions.length,
-        startedAt: new Date().toISOString(), steps: [] };
+        startedAt: new Date().toISOString(),
+        steps: actions.map(({ type }, index) => ({ index, type, state: 'pending' })) };
       this.actions.push(record);
       this.actionSequences++;
       if (this.actions.length > 100) this.actions.shift();
@@ -621,16 +622,20 @@ export class GameRuntime {
       this.usedRequestIds.add(requestId);
       while (this.requests.size > 100) this.requests.delete(this.requests.keys().next().value);
       const nativeDeadline = performance.now() + 20000;
+      const deadline = new AbortController();
+      const timer = setTimeout(() => deadline.abort(new Error('Action batch exceeded its execution deadline')), ACTION_TIMEOUT_MS);
+      const inputSignal = AbortSignal.any([requestSignal, deadline.signal]);
       let deferredResume;
+      let step;
       try {
         await this.log('action-start', { ...record, inputs: actions });
-        await this.capture('before-action');
         for (const [index, action] of actions.entries()) {
           inputSignal.throwIfAborted();
           await this.assertReady(sessionId);
+          inputSignal.throwIfAborted();
           this.currentStep = index;
-          const step = { index, type: action.type, state: 'issuing' };
-          record.steps.push(step);
+          step = record.steps[index];
+          step.state = 'issuing';
           const next = actions[index + 1];
           if (action.type === 'resume' && (next?.type === 'wait_ticks' ||
             (this.agentControls.paused && this.agentControls.queueInputBeforeResume && next?.type === 'click'))) {
@@ -641,6 +646,7 @@ export class GameRuntime {
           }
           const bounds = await this.canvas.boundingBox();
           if (!bounds) throw new Error('Game canvas is not visible');
+          inputSignal.throwIfAborted();
           if (action.type === 'screenshot') {
             const frame = await this.capture('sequence-screenshot');
             result.screenshots.push(frame);
@@ -672,24 +678,26 @@ export class GameRuntime {
           inputSignal.throwIfAborted();
           await this.assertReady(sessionId);
         }
-        if (afterMs) await sleep(afterMs, undefined, { signal: inputSignal });
         if (!this.evaluation) void this.pollEvaluation();
-        await this.assertReady(sessionId);
-        result.frame = await this.capture('after-action');
+        inputSignal.throwIfAborted();
         record.state = 'completed';
       } catch (error) {
-        record.state = this.evaluation?.result?.success ? 'stopped' : 'failed'; record.error = error.message;
+        const failure = deadline.signal.aborted ? deadline.signal.reason : error;
+        record.state = this.evaluation?.result?.success ? 'stopped' : 'failed';
+        record.error = failure.message;
         if (error.toolDetails) Object.assign(record, error.toolDetails);
-        const step = record.steps.at(-1);
+        if (deadline.signal.aborted) record.code = 'ACTION_TIMEOUT';
         if (deferredResume) deferredResume.state = 'interrupted';
         if (step?.state === 'issuing') {
-          if (record.state === 'stopped' && ['wait', 'wait_ticks'].includes(step.type)) step.state = 'interrupted';
+          if ((inputSignal.aborted && step.type === 'wait') ||
+            (record.state === 'stopped' && step.type === 'wait_ticks')) step.state = 'interrupted';
           else if (step.type === 'screenshot') step.state = 'capture-failed';
           else if (error.nativeFailure && nativeActions.has(step.type)) step.state = 'native-failed';
           else step.state = 'delivery-uncertain';
         }
-        try { result.frame = await this.capture(record.state === 'stopped' ? 'stopped-action' : 'failed-action'); } catch { /* Status remains available after renderer loss. */ }
       } finally {
+        clearTimeout(timer);
+        for (const item of record.steps) if (item.state === 'pending') item.state = 'skipped';
         record.finishedAt = new Date().toISOString();
         this.currentActionId = null; this.currentStep = null;
         await this.log('action-finish', record).catch(() => {});
@@ -727,12 +735,14 @@ export class GameRuntime {
   }
 
   async execute(action, box, signal = this.shutdownSignal.signal) {
+    signal.throwIfAborted();
     const page = this.page;
     const move = (x, y, steps = 1) => page.mouse.move(box.x + x, box.y + y, { steps });
     if (action.type === 'move') await move(action.x, action.y);
     if (action.type === 'wait') await sleep(action.milliseconds, undefined, { signal });
     if (action.type === 'click') {
       await move(action.x, action.y);
+      signal.throwIfAborted();
       await page.mouse.click(box.x + action.x, box.y + action.y, { button: action.button,
         clickCount: action.count, delay: action.hold_ms });
     }
@@ -742,6 +752,7 @@ export class GameRuntime {
     }
     if (action.type === 'drag') {
       await move(action.from_x, action.from_y);
+      signal.throwIfAborted();
       await page.mouse.down({ button: action.button });
       try {
         await sleep(action.hold_ms, undefined, { signal });

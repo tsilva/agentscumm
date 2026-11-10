@@ -128,16 +128,15 @@ tool('observe', 'Read game images without input. fresh (default) captures now, i
     ...frames.flatMap(frame => imageContent({ ...frame, source }))] };
 }, true);
 
-tool('act', 'Execute up to 32 ordered steps, including up to 8 screenshots and 20 seconds of input holds/waits. Mix clicks, keys, waits and screenshots with native pause, resume (play), wait_ticks (advance the requested engine updates or runtime frames and hold), save(id) and load(id) steps in the same actions array. Prefer native steps for controls listed in status.nativeControls.actions. Save and load use run-local integer slots. A batch containing an unsupported native step is rejected before input with code NATIVE_CONTROL_UNSUPPORTED. Steps stop on failure. Reuse request_id only with identical arguments to retrieve the cached result without repeating input (last 100 requests).', {
+tool('act', 'Execute up to 32 ordered steps, including up to 8 explicit screenshots and 20 seconds of input holds/waits. Wait for one final receipt with the outcome of every step and images for successful screenshot steps only. Add a screenshot step at the end if you need to see the result. Mix clicks, keys, waits and screenshots with native pause, resume (play), wait_ticks (advance and hold), save(id) and load(id) in the same actions array. Use the native controls advertised by status.nativeControls.actions. Save and load use run-local integer slots. Unsupported native steps reject the batch before input. A failed step stops the batch. After an uncertain reply, check status and observe before issuing new input.', z.strictObject({
   session_id: z.string().uuid(), request_id: z.string().min(1).max(100),
   frame_id: z.string().optional(), actions: z.array(actionSchema).min(1).max(32),
-  after_ms: z.number().int().min(0).max(3000).default(200),
-}, async (args, signal) => {
-  const { frame, screenshots, ...result } = await runtime.act(args, signal);
+}), async (args, signal) => {
+  const { screenshots, ...result } = await runtime.act(args, signal);
   return { isError: result.action.state === 'failed', content: [
-    text({ ...result, selectedFrames: screenshots.length + Number(Boolean(frame)),
+    text({ ...result, selectedFrames: screenshots.length,
       screenshots: screenshots.map(frame => ({ step: frame.step, frame_id: frame.id })) }),
-    ...screenshots.flatMap(imageContent), ...(frame ? imageContent(frame) : []),
+    ...screenshots.flatMap(imageContent),
   ] };
 });
 

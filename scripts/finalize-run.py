@@ -3,6 +3,7 @@
 
 import argparse
 from datetime import datetime, timezone
+import fcntl
 import hashlib
 import html
 import importlib.util
@@ -17,11 +18,13 @@ import threading
 import time
 from zoneinfo import ZoneInfo
 
-
 ROOT = Path(__file__).resolve().parent.parent
 SPEC = importlib.util.spec_from_file_location("agentscumm_export", ROOT / "scripts/export-run.py")
 EXPORT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(EXPORT)
+MLFLOW_SPEC = importlib.util.spec_from_file_location("agentscumm_run_mlflow", ROOT / "scripts/run_mlflow.py")
+MLFLOW = importlib.util.module_from_spec(MLFLOW_SPEC)
+MLFLOW_SPEC.loader.exec_module(MLFLOW)
 require = EXPORT.require
 LEGACY_BENCHMARK_HEADER = "| Status | Game | Date (UTC) | Model / effort | Walkthrough assistance | Completion time | Tokens | Total actions | Action sequences |"
 LEGACY_BENCHMARK_SEPARATOR = "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |"
@@ -79,7 +82,7 @@ def private_directory(repo, directory):
 
 
 def atomic_json(path, value):
-    require(not path.is_symlink(), "Linked finalization state")
+    require(not path.is_symlink(), "Linked local state file")
     fd, scratch = tempfile.mkstemp(prefix=".state-", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -89,6 +92,87 @@ def atomic_json(path, value):
     finally:
         if Path(scratch).exists():
             Path(scratch).unlink()
+
+
+def mlflow_archives(repo):
+    root = repo / "runs"
+    require(not root.is_symlink(), "Linked run archive root")
+    if not root.exists():
+        return []
+    return sorted(
+        archive for game in root.iterdir()
+        if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", game.name) and not game.is_symlink() and game.is_dir()
+        for archive in game.iterdir()
+        if re.fullmatch(r"[0-9]{8}-[A-Za-z0-9][A-Za-z0-9._-]{0,99}", archive.name) and archive.is_dir()
+    )
+
+
+def mlflow_receipt(directory, config, archive):
+    require(not any(part.is_symlink() for part in (archive, *archive.parents)), "Linked run archive path")
+    metadata = archive / "run.json"
+    if not metadata.exists() and not metadata.is_symlink():
+        metadata = archive / "stats.json"
+    require(not metadata.is_symlink() and metadata.is_file(), "Missing or linked archive metadata")
+    digest = hashlib.sha256(metadata.read_bytes()).hexdigest()
+    key = hashlib.sha256(EXPORT.dump([config, digest]).encode()).hexdigest()
+    receipt = directory / f"{key}.json"
+    require(not receipt.is_symlink(), "Linked MLflow delivery receipt")
+    return receipt
+
+
+def mlflow_queue(repo, *, archive=None, status_only=False):
+    config = MLFLOW.load_config(repo)
+    require(status_only or config is not None, "Configure .local/mlflow.json or MLFLOW_TRACKING_URI before flushing")
+    archives = [archive] if archive is not None else mlflow_archives(repo)
+    directory = repo / ".internal/mlflow"
+    require(not directory.is_symlink() and not directory.parent.is_symlink(), "Linked MLflow receipt directory")
+
+    def process():
+        entries, unavailable = [], False
+        for path in archives:
+            entry = {"archive": str(path), "status": "pending"}
+            entries.append(entry)
+            try:
+                receipt = mlflow_receipt(directory, config, path)
+                if config is not None and receipt.exists():
+                    require(receipt.is_file(), "Invalid MLflow delivery receipt")
+                    saved = json.loads(receipt.read_text())
+                    require(isinstance(saved, dict) and saved.get("status") == "published"
+                            and saved.get("run_id") and saved.get("experiment_id"), "Invalid MLflow delivery receipt")
+                    entry.update(saved)
+                elif not status_only and not unavailable:
+                    stats = EXPORT.verify_run(path)
+                    require(mlflow_receipt(directory, config, path) == receipt,
+                            "Archive metadata changed during verification; retry")
+                    published = MLFLOW.publish(config, stats)
+                    atomic_json(receipt, published)
+                    entry.update(published, sent=True)
+            except MLFLOW.TrackingUnavailable as error:
+                entry.update(status="failed", error=str(error))
+                unavailable = True
+            except (ValueError, OSError, KeyError, TypeError, AttributeError) as error:
+                entry.update(status="failed", error=str(error))
+        return {
+            "destination_configured": config is not None,
+            "sent": sum(entry.get("sent", False) for entry in entries),
+            "published": sum(entry["status"] == "published" for entry in entries),
+            "pending": sum(entry["status"] != "published" for entry in entries),
+            "failed": sum(entry["status"] == "failed" for entry in entries),
+            "archives": entries,
+        }
+
+    if status_only or not archives:
+        return process()
+    private_directory(repo, directory)
+    # Hold one checkout-wide lock through receipt creation so both upload commands
+    # serialize delivery. The OS releases it if the process is interrupted.
+    fd = os.open(directory / "flush.lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError("An MLflow flush is already in progress") from error
+        return process()
 
 
 def turn_cutoff(rollout, turn_id):
@@ -480,6 +564,7 @@ def finalize(request):
         atomic_json(state_file, state)
         added = register_benchmark(archive, repo=repo, title=request.get("game_title"))
         state.update(status="completed", benchmark_added=added, verified=True,
+                     mlflow={"status": "pending", "command": "flush-mlflow"},
                      api_cost_status=stats.get("api_cost", {}).get("status", "unavailable"),
                      total_api_price_usd=stats.get("api_cost", {}).get("total_api_price_usd"))
         atomic_json(state_file, state)
@@ -536,6 +621,10 @@ def main():
     register = commands.add_parser("register", help="Register an already verified archive without exporting again")
     register.add_argument("archive", type=Path)
     register.add_argument("--game-title")
+    tracking = commands.add_parser("publish-mlflow", help="Send or retry a verified archive in MLflow")
+    tracking.add_argument("archive", type=Path)
+    flush = commands.add_parser("flush-mlflow", help="Send pending run archives to MLflow")
+    flush.add_argument("--status", action="store_true", help="List local delivery state without contacting MLflow")
     args = parser.parse_args()
     try:
         if args.command == "queue":
@@ -551,9 +640,15 @@ def main():
         elif args.command == "worker":
             require(args.request.is_file() and not args.request.is_symlink(), "Request must be a regular, unlinked file")
             result = finalize(json.loads(args.request.read_text()))
-        else:
+        elif args.command == "register":
             result = {"benchmark_added": register_benchmark(args.archive.absolute(), title=args.game_title)}
+        elif args.command == "publish-mlflow":
+            result = mlflow_queue(ROOT, archive=args.archive.absolute())["archives"][0]
+        else:
+            result = mlflow_queue(ROOT, status_only=args.status)
         print(EXPORT.dump(result))
+        if result.get("failed") or result.get("status") == "failed":
+            sys.exit(1)
     except (ValueError, OSError, KeyError, StopIteration, subprocess.CalledProcessError) as error:
         parser.exit(1, f"Finalization failed: {error}\n")
 

@@ -107,6 +107,67 @@ class ExportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "different game"):
             self.export(run_id="wrong-game")
 
+    def test_progress_curve_counts_at_submission_and_ignores_restore_and_preflight(self):
+        rows = fixture(complete=True)
+        profile = self.repo / "browser"
+        (profile / "runs").mkdir(parents=True)
+        launch = rows[5]["payload"]["item"]
+        runtime = {"sessionId": SESSION, "game": "synthetic-game", "dataDir": str(profile)}
+        launch["result"] = runtime
+        preflight = "33333333-3333-4333-8333-333333333333"
+        rows.insert(5, record("event_msg", {"type": "item_completed", "turn_id": "turn-1", "item": {
+            **launch, "id": "preflight", "result": {**runtime, "sessionId": preflight, "runId": "preflight-test"},
+        }}, 1))
+        action = rows[7]["payload"]
+        rows.insert(6, record("event_msg", {**action, "item": {
+            **action["item"], "id": "preflight-act", "arguments": {
+                "session_id": preflight, "actions": [{"type": "click"}]},
+        }}, 1))
+        action["started_at_ms"] = int(datetime(2026, 11, 5, 12, 0, 2, 500000,
+                                               tzinfo=timezone.utc).timestamp() * 1000)
+        journal = [{"type": "launch", **runtime}]
+        for second, completed in ((2, 0), (3, 1), (4, 0), (5, 2), (9, 3)):
+            journal.append({"type": "progress", "sessionId": SESSION,
+                            "timestamp": record("", {}, second)["timestamp"], "progress": {
+                "game": "synthetic-game", "state": "tracked", "map_revision": "a" * 64,
+                "total": 3, "completed": completed, "percent": round(100 * completed / 3),
+                "reached": ["one", "two", "three"][:completed],
+                "latest_milestone": "Latest" if completed else None}})
+        (profile / "runs" / f"{SESSION}.jsonl").write_text("".join(json.dumps(row) + "\n" for row in journal))
+        self.source(rows)
+        archive, stats = self.export(status="completed", completion_note="Ending observed")
+        self.assertEqual(stats["verified_progress"]["percent"], 67)
+        self.assertEqual(stats["total_actions"], 2)
+        self.assertEqual([(p["percent"], p["actions"], p["action_sequences"]) for p in stats["progress_curve"]["points"]],
+                         [(0, 0, 0), (33, 2, 1), (67, 2, 1)])
+        self.assertEqual(stats["timed_action_sequences"][0]["types"], ["click", "wait"])
+        self.assertEqual(EXPORT.verify_run(archive), stats)
+        stats["progress_curve"]["points"][1]["actions"] = 0
+        (archive / "run.json").write_text(json.dumps(stats))
+        with self.assertRaisesRegex(ValueError, "Invalid progress curve"):
+            EXPORT.verify_run(archive)
+
+    def test_verified_win_can_leave_optional_milestones_unchecked(self):
+        start = record("", {}, 0)["timestamp"]
+        end = record("", {}, 4)["timestamp"]
+        stats = {
+            "game_id": "synthetic-game", "sessions": [SESSION],
+            "started_at": start, "recorded_through": end,
+            "verified_progress": {
+                "game": "synthetic-game", "session_id": SESSION, "state": "tracked",
+                "recorded_at": end, "total": 3, "completed": 1, "percent": 100,
+                "reached": ["winning-ending"], "latest_milestone": "Won", "won": True,
+            },
+        }
+        EXPORT.verify_run_progress(stats)
+        progress = stats["verified_progress"]
+        progress["won"] = False
+        with self.assertRaisesRegex(ValueError, "Invalid verified milestone count"):
+            EXPORT.verify_run_progress(stats)
+        progress.pop("won")
+        progress["percent"] = 33
+        EXPORT.verify_run_progress(stats)
+
     def test_round_trip_preserves_conversation_and_links_all_image_copies(self):
         self.source()
         original = self.rollout.read_bytes()

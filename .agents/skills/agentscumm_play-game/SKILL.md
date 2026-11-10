@@ -54,9 +54,9 @@ After restart or fallback startup, call `status` through the working MCP connect
 
 Read [references/local-mcp-client.md](references/local-mcp-client.md) when the attached tools are missing, stale or disconnected. Use the maintained `scripts/mcp-client.mjs` in this skill, not a new client implementation. Keep its process and stdin alive across calls, verify the server revision, then perform gameplay through the same MCP tools. Tell the user which route is working; do not claim the desktop host reconnected when using the local client.
 
-### Test MCP tools before play
+### Test MCP tools before a new run
 
-After verifying the MCP revision, run this preflight at the start of every play or resume request. Use the requested game and edition with a fresh disposable `run_id` and save scope. Use the verified play connection if it is idle and can isolate the test saves. If it already owns a live game, cannot isolate test saves, or has a legacy save import or evaluator endpoint configured, start the local MCP client with a separate `.internal/<game-id>/preflight-<unique-id>/` directory, the same ScummWEB origin, and the verified revision. Check the applicable read-only tools on the intended play connection too. Leave the live session and its saves alone.
+After verifying the MCP revision, run this disposable preflight only when starting a new playthrough. For a live session or saved run, skip to [Resume an existing run](#resume-an-existing-run). Use the requested game and edition with a fresh disposable `run_id` and save scope. Use the verified play connection if it is idle and can isolate the test saves. If it already owns a live game, cannot isolate test saves, or has a legacy save import or evaluator endpoint configured, start the local MCP client with a separate `.internal/<game-id>/preflight-<unique-id>/` directory, the same ScummWEB origin, and the verified revision. Check the applicable read-only tools on the intended play connection too. Leave the live session and its saves alone.
 
 1. Compare the exposed tool schemas with the server inventory in `status`. Call `list_games` and `library(operation="status")` and check their responses. Test the library through its read-only status operation. Import a ZIP only if the disposable profile needs the already authorized files for this game.
 2. Start the test game with `session(operation="start")`, the disposable `run_id`, and a fresh launch mode. Prefer Skip Intro if it gives a playable scene sooner. Poll `status(wait_ms=10000)` while loading. Verify the returned test scope and inspect a fresh `observe` image after readiness. Use the minimum input needed to pass menus or an intro and reach the first safe playable scene. If the spectator is part of the run, verify it opens and closes on the disposable session.
@@ -66,7 +66,11 @@ After verifying the MCP revision, run this preflight at the start of every play 
 
 If any required tool or control is missing, errors, or cannot be verified safely, report the game, failing operation, and returned reason or evidence to the user and stop. Clean up only the disposable session you own. Do not start the playthrough or use the game's UI to pass a failed check.
 
-After every check passes, restart the game with `session(operation="start", restart=true)` for the actual playthrough and verify that it returns a new session ID. Use the requested launch mode and a fresh play scope distinct from the test scope for a new run. For a saved run, use Continue with its original `run_id` and browser profile, or the unscoped Continue route for older saves. If restarting a live run would discard progress, close the separate test session and resume the live game intact. Confirm readiness, observe the actual opening or restored room and inventory, and record the actual session and run IDs before gameplay input. Open the spectator if needed.
+After every check passes, restart the game with `session(operation="start", restart=true)` for the actual playthrough and verify that it returns a new session ID. Use the requested launch mode and a fresh play scope distinct from the test scope. Confirm readiness, observe the opening scene and inventory, and record the actual session and run IDs before gameplay input. Open the spectator if needed.
+
+### Resume an existing run
+
+After the clean-checkout and MCP revision checks, reuse the live session if it still owns the run. Otherwise use Continue with the original `run_id` and browser profile, or the unscoped Continue route for older saves. Skip the disposable session and native-control test suite even when a restore needs a new MCP connection or game session. Confirm readiness and inspect the advertised controls. Verify the scene and inventory against the recorded checkpoint, then record the actual session and run IDs before continuing play. Open the spectator if needed.
 
 ## Play toward completion
 
@@ -78,9 +82,11 @@ Select tools by purpose; use their current schemas for arguments and limits:
 | `session` | `"start"` launches or reuses a game. `"open_viewer"` and `"close_viewer"` control the spectator. `"close"` ends the game session. Restart requires `restart: true` on start. |
 | `status` | Inspect readiness, health and server revision; `wait_ms` optionally waits while loading. |
 | `observe` | Default `source: "fresh"` captures now; `"history"` samples recent frames; `"frames"` retrieves exact `frame_ids`. Historical images are not current observations. |
-| `act` | Batch ordered inputs, waits, screenshots and supported native game controls. Inspect the returned images before choosing actions that depend on their contents. |
+| `act` | Batch ordered inputs, waits, screenshots and supported native game controls. Wait for the receipt. Images come from explicit screenshot steps. |
 
-Use the current MCP tool schemas and returned observations for mechanical controls and limits. Work through the game autonomously: observe, decide, act, and check what happened. Use `act` for individual inputs or useful sequences, including explicit `screenshot` steps when intermediate observations matter, with the current session ID and a unique request ID. Reuse a request ID with identical arguments only to retrieve the same attempt after an uncertain response; do not blindly repeat potentially delivered input.
+Use the current MCP tool schemas and returned observations for mechanical controls and limits. Work through the game autonomously: observe, decide, act, and check what happened. Use the current session ID and a unique request ID for each `act`. Include a `screenshot` step wherever you need visual feedback, including at the end of a batch when needed.
+
+Wait for the original `act` reply in one model tool call. Give the calling host a full minute to receive the result. In Codex code mode, use a 60-second exec yield window for action calls. Keep any local process reads inside that same tool call. This applies to every game and strategy. If the receipt is missing after a timeout or disconnect, check `status.recentActions` for the original request ID and take a fresh observation before sending new inputs. A known accepted request can be replayed with the same ID and identical arguments to retrieve its cached receipt.
 
 Use fresh screenshots to ground clicks, especially after inventory changes. Allow walking, dialogue, and animations to finish. A delivered sequence can include clicks the game ignored while busy; inspect its result and use `observe(source="history")` promptly for transient events. Prefer shorter sequences at uncertain transitions and batch predictable actions when useful. Do not require single-batch solving unless requested.
 

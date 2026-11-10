@@ -12,7 +12,7 @@ Keep scrolling positions or camera angles as separate views of the same room. On
 
 Use the game's normal hover labels if it provides them. If label behavior is unknown, try one plausible target first to establish whether hovering reveals readable text and which normal verb/cursor mode applies. A blank or unreadable result does not prove there is no object. Some games require another ordinary interaction to identify objects; do not keep scanning for labels the game does not expose.
 
-For independent candidates in a stable view, submit one `act` containing repeated `move → wait → screenshot` groups. The wait gives the game a chance to update its label before capture. Start with a short delay, such as 200 ms, and adjust from observed results; this is not a universal timing guarantee. Include an explicit screenshot after each candidate rather than relying on sampled history or the automatic final screenshot.
+For independent candidates in a stable view, submit one `act` containing repeated `move → wait → screenshot` groups. The wait gives the game a chance to update its label before capture. Start with a short delay, such as 200 ms, and adjust from observed results. Include a screenshot step after each candidate.
 
 Example for two candidates in a 960 × 720 observation; replace the IDs and coordinates with the current session, fresh reference frame and actual candidate points:
 
@@ -28,8 +28,7 @@ Example for two candidates in a 960 × 720 observation; replace the IDs and coor
     { "type": "move", "x": 480, "y": 260 },
     { "type": "wait", "milliseconds": 200 },
     { "type": "screenshot" }
-  ],
-  "after_ms": 0
+  ]
 }
 ```
 
@@ -37,7 +36,7 @@ Respect the current schema limits: presently 32 steps, eight explicit screenshot
 
 ## Interpret the returned captures
 
-Match each requested screenshot to its zero-based step index using the result's `screenshots` entries (`step`, `frame_id`) and the image metadata. In the example, steps 2 and 5 correspond to the two candidates. A final screenshot is also returned; do not count it as a third candidate. Captures retain their original timestamp and action/step association.
+Match each screenshot to its zero-based step index using the result's `screenshots` entries (`step`, `frame_id`) and the image metadata. In the example, steps 2 and 5 correspond to the two candidates and produce the two returned images. Captures retain their timestamps and action and step associations.
 
 Read the exact visible label and associate it with that group's pointer coordinates. Distinguish confirmed labels from visual guesses; a label identifies a target, not its correct verb, item, prerequisite or puzzle solution. Check that text has updated rather than carrying over from the previous hover. Repeated points yielding the same object label may be the same hotspot, not separate objects. If a label is absent or unclear, try a targeted adjustment or longer dwell only when useful; do not invent a name or enumerate every pixel.
 

@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { ACTION_REPLY_TIMEOUT_MS } from '../../../../src/actions.js';
 
 const root = await realpath(path.resolve(import.meta.dirname, '../../../..'));
 const { values } = parseArgs({ options: {
@@ -90,9 +91,11 @@ try {
     if (!line.trim()) continue;
     if (line.trim() === 'quit') break;
     let request;
+    const submittedAt = new Date().toISOString();
     try {
       request = JSON.parse(line);
-      const result = await client.callTool(request);
+      const result = await client.callTool(request, undefined,
+        request.name === 'act' ? { timeout: ACTION_REPLY_TIMEOUT_MS } : undefined);
       const content = [];
       for (const item of result.content) {
         if (item.type === 'image') {
@@ -106,11 +109,11 @@ try {
         }
       }
       const output = { name: request.name, isError: Boolean(result.isError), content };
-      await appendFile(path.join(runDir, 'events.jsonl'), JSON.stringify({ timestamp: new Date().toISOString(), request, result: output }) + '\n', { mode: 0o600 });
+      await appendFile(path.join(runDir, 'events.jsonl'), JSON.stringify({ timestamp: new Date().toISOString(), submittedAt, request, result: output }) + '\n', { mode: 0o600 });
       console.log(JSON.stringify(output));
     } catch (error) {
       const output = { name: request?.name, isError: true, error: error.message };
-      await appendFile(path.join(runDir, 'events.jsonl'), JSON.stringify({ timestamp: new Date().toISOString(), request, result: output }) + '\n', { mode: 0o600 });
+      await appendFile(path.join(runDir, 'events.jsonl'), JSON.stringify({ timestamp: new Date().toISOString(), submittedAt, request, result: output }) + '\n', { mode: 0o600 });
       console.log(JSON.stringify(output));
     }
   }

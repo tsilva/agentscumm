@@ -202,18 +202,16 @@ def local_runtime_telemetry(repo, game, run_id, agent_context, work_dir, started
         session_id, steps = args.get("session_id"), args.get("actions")
         if (isinstance(session_id, str) and isinstance(steps, list)
                 and all(isinstance(step, dict) and isinstance(step.get("type"), str) for step in steps)):
-            sequences.append((session_id, [step["type"] for step in steps]))
-    return latest, sessions, [steps for session_id, steps in sequences if session_id in sessions], revisions
+            submitted = event.get("submittedAt")
+            if submitted and not started <= USAGE.timestamp(submitted) <= when:
+                submitted = None
+            sequences.append((session_id, submitted, [step["type"] for step in steps]))
+    return latest, sessions, [(submitted, steps) for session_id, submitted, steps in sequences
+                              if session_id in sessions], revisions
 
 
-def verified_run_progress(active, game, started, end):
-    if not active:
-        return None
-    _, (session, observed_game, profile) = active
-    if observed_game != game:
-        return None
+def progress_samples(session, game, profile, started, end):
     launch_verified = False
-    latest = None
     for row in private_records(profile / "runs" / f"{session}.jsonl"):
         if row.get("sessionId") != session:
             continue
@@ -222,9 +220,65 @@ def verified_run_progress(active, game, started, end):
         if launch_verified and row.get("type") == "progress":
             when = USAGE.timestamp(row["timestamp"])
             if started <= when <= end:
-                latest = row
-    if latest and latest["progress"]["state"] == "tracked":
-        return {**latest["progress"], "session_id": session, "recorded_at": latest["timestamp"]}
+                yield {**row["progress"], "session_id": session, "recorded_at": row["timestamp"]}
+
+
+def attached_submission(start_ms, started, completed):
+    if type(start_ms) is int and started.timestamp() * 1000 <= start_ms <= completed.timestamp() * 1000:
+        return datetime.fromtimestamp(start_ms / 1000, timezone.utc).isoformat()
+    return None
+
+
+def progress_curve(samples, sequences):
+    """Count all submitted steps in a batch when its request was issued."""
+    if not samples or any(when is None for when, _ in sequences):
+        return None
+    revisions = {sample.get("map_revision") for sample in samples}
+    if len(revisions) != 1 or None in revisions:
+        return None
+    series = sorted((USAGE.timestamp(when), len(steps)) for when, steps in sequences)
+    points, highest, index, actions = [], -1, 0, 0
+    for sample in sorted(samples, key=lambda item: USAGE.timestamp(item["recorded_at"])):
+        percent = sample["percent"]
+        if percent <= highest:
+            continue
+        when = USAGE.timestamp(sample["recorded_at"])
+        while index < len(series) and series[index][0] <= when:
+            actions += series[index][1]
+            index += 1
+        points.append({"percent": percent, "recorded_at": sample["recorded_at"],
+                       "actions": actions, "action_sequences": index})
+        highest = percent
+    return {"map_revision": revisions.pop(), "points": points}
+
+
+def verify_progress_curve(stats):
+    sequences = stats.get("timed_action_sequences")
+    if sequences is not None:
+        actions = Counter()
+        submitted = USAGE.timestamp(stats["started_at"])
+        end = USAGE.timestamp(stats["recorded_through"])
+        for sequence in sequences:
+            when = USAGE.timestamp(sequence["submitted_at"])
+            require(submitted <= when <= end, "Invalid action sequence timestamp")
+            submitted = when
+            actions.update(sequence["types"])
+        require(len(sequences) == stats["total_action_sequences"] and actions == stats["actions"]
+                and sequence_stats([len(sequence["types"]) for sequence in sequences]) == stats["action_sequences"],
+                "Timed action sequences do not match archive totals")
+    curve = stats.get("progress_curve")
+    if curve is None:
+        return
+    require(re.fullmatch(r"[a-f0-9]{64}", curve["map_revision"]) and curve["points"],
+            "Invalid progress curve map revision or empty series")
+    require(sequences is not None, "Progress curve requires timed action sequences")
+    reconstructed = progress_curve(
+        [{**point, "map_revision": curve["map_revision"]} for point in curve["points"]],
+        [(sequence["submitted_at"], sequence["types"]) for sequence in sequences])
+    require(curve == reconstructed and all(type(point["percent"]) is int and 0 <= point["percent"] <= 100
+            and USAGE.timestamp(stats["started_at"]) <= USAGE.timestamp(point["recorded_at"])
+            <= USAGE.timestamp(stats["recorded_through"]) for point in curve["points"]),
+            "Invalid progress curve points")
 
 
 def verify_run_progress(stats):
@@ -242,9 +296,11 @@ def verify_run_progress(stats):
     require(USAGE.timestamp(stats["started_at"]) <= when <= USAGE.timestamp(stats["recorded_through"]),
             "Verified progress is outside the archive cutoff")
     total, completed, reached = (progress.get(key) for key in ("total", "completed", "reached"))
+    won = progress.get("won", False)
     require(type(total) is int and type(completed) is int and 0 <= completed <= total <= 100 and total > 0
+            and type(won) is bool and (not won or completed > 0)
             and type(progress.get("percent")) is int
-            and progress["percent"] == math.floor(completed * 100 / total + 0.5)
+            and progress["percent"] == (100 if won else math.floor(completed * 100 / total + 0.5))
             and isinstance(reached, list) and len(reached) == completed
             and all(isinstance(item, str) and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", item) for item in reached)
             and len(set(reached)) == completed, "Invalid verified milestone count")
@@ -899,9 +955,11 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
         screenshots = Screenshots(safe_directory(staging / "screenshots"))
         screenshots.prepare(source)
         counts, tools, actions, contexts = Counter(), Counter(), Counter(), []
-        sequence_lengths = []
+        sequences = []
         seen_tools, sessions, observed_games, revisions = set(), set(), set(), []
         attached_revisions, attached_actions = {}, set()
+        profiles = {}
+        preflight_sessions = set()
         active_session = None
         last_task, end, source_records, model_images, tool_seconds = None, started, 0, 0, 0.0
         trajectory = staging / "trajectory.jsonl"
@@ -941,20 +999,27 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                                     session = runtime_session(objects)
                                     if session:
                                         sessions.add(session[0])
-                                        active_session = when, session
-                                        if session[1] == game_id and reported_revisions:
-                                            known = attached_revisions.setdefault(session[0], [])
-                                            known.extend(r for r in reported_revisions if r not in known)
+                                        if any(value.get("sessionId") == session[0]
+                                               and str(value.get("runId", "")).startswith("preflight-")
+                                               for value in objects):
+                                            preflight_sessions.add(session[0])
+                                        elif session[1] == game_id:
+                                            active_session = when, session
+                                            profiles[session[0]] = session[2]
+                                            if reported_revisions:
+                                                known = attached_revisions.setdefault(session[0], [])
+                                                known.extend(r for r in reported_revisions if r not in known)
                                 if args.get("session_id"):
                                     sessions.add(args["session_id"])
                                 if (item.get("tool") == "launch_game" or
                                         (item.get("tool") == "session" and args.get("operation") == "start")) and args.get("game"):
                                     observed_games.add(args["game"])
                                 if item.get("tool") == "act":
-                                    if args.get("session_id"):
-                                        attached_actions.add(args["session_id"])
-                                    sequence_lengths.append(len(args.get("actions", [])))
-                                    actions.update(a["type"] for a in args.get("actions", []))
+                                    session_id = args.get("session_id")
+                                    if session_id:
+                                        attached_actions.add(session_id)
+                                    submitted = attached_submission(payload.get("started_at_ms"), started, when)
+                                    sequences.append((session_id, submitted, [a["type"] for a in args.get("actions", [])]))
                 if record.get("type") == "response_item" and payload.get("type") in TOOL_OUTPUT_TYPES:
                     blocks = payload.get("output", [])
                     if isinstance(blocks, list):
@@ -971,14 +1036,25 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                 gameplay_revisions.extend(r for r in reported_revisions if r not in gameplay_revisions)
         gameplay_revisions.extend(r for r in local_revisions if r not in gameplay_revisions)
         sessions.update(local_sessions)
-        for steps in local_sequences:
-            sequence_lengths.append(len(steps))
+        sequences = [(when, steps) for session, when, steps in sequences if session not in preflight_sessions]
+        sequences.extend(local_sequences)
+        sequence_lengths = [len(steps) for _, steps in sequences]
+        for _, steps in sequences:
             actions.update(steps)
-        progress = None
-        if status != "completed":
-            if local_session and (not active_session or local_session[0] > active_session[0]):
+        if local_session:
+            profiles.update(dict.fromkeys(local_sessions, local_session[1][2]))
+            if not active_session or local_session[0] > active_session[0]:
                 active_session = local_session
-            progress = verified_run_progress(active_session, game_id, started, end)
+        progress = None
+        samples = []
+        for session, profile in profiles.items():
+            if session in preflight_sessions:
+                continue
+            current = list(progress_samples(session, game_id, profile, started, end))
+            samples.extend(sample for sample in current if sample["state"] == "tracked")
+            if current and active_session and session == active_session[1][0] and current[-1]["state"] == "tracked":
+                progress = current[-1]
+        curve = progress_curve(samples, sequences)
         if status == "completed":
             require(last_task == "task_complete", "Conversation is still active or interrupted; cannot finalize")
             require(isinstance(completion_note, str) and completion_note.strip(),
@@ -1046,6 +1122,13 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
             stats["limitations"].append("Some unforwarded MCP screenshots survive only as truncated rollout fragments.")
         if progress:
             stats["verified_progress"] = progress
+        if curve:
+            stats["progress_curve"] = curve
+        if all(when is not None for when, _ in sequences):
+            stats["timed_action_sequences"] = [
+                {"submitted_at": when, "types": steps}
+                for when, steps in sorted(sequences, key=lambda pair: USAGE.timestamp(pair[0]))
+            ]
         if local_sequences:
             stats["local_mcp_action_sequences"] = len(local_sequences)
         write_json(staging / "run.json", stats)
@@ -1083,6 +1166,7 @@ def verify_run(directory):
         require(stats["status"] != "completed" or stats["estimated_progress_percent"] in (None, 100),
                 "Completed runs require 100 percent progress")
     verify_run_progress(stats)
+    verify_progress_curve(stats)
     if "total_actions" in stats or "total_action_sequences" in stats:
         for key, expected in (("total_actions", sum(stats["actions"].values())),
                               ("total_action_sequences", stats["action_sequences"]["count"])):

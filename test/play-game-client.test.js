@@ -57,6 +57,7 @@ test('play-game client records MCP images and calls inside a resumable run', { t
     request_id: 'client-sequence', actions: [{ type: 'click', x: 100, y: 100 }, { type: 'wait', milliseconds: 100 }] });
   assert.equal(acted.isError, false);
   assert.equal(acted.content[0].action.completed, 2);
+  assert.equal(acted.content.length, 1, 'The client returns only the final receipt for input-only batches');
   const events = (await readFile(path.join(runDir, 'events.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   assert.equal(events.length, 4);
   assert.equal(events[2].request.name, 'observe');

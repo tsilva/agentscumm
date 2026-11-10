@@ -39,7 +39,7 @@ test('parallel stdio servers isolate profiles, input, history, viewers and shutd
   assert.equal(readyB.phase, 'ready', readyB.message);
   assert.notEqual(readyA.sessionId, readyB.sessionId);
   assert.notEqual(new URL(readyA.viewerUrl).port, new URL(readyB.viewerUrl).port);
-  const sequence = state => ({ session_id: state.sessionId, request_id: 'same-request-id', after_ms: 0,
+  const sequence = state => ({ session_id: state.sessionId, request_id: 'same-request-id',
     actions: [{ type: 'key', key: 'a' }, { type: 'screenshot' }] });
   assert.equal((await b('act', sequence(readyA))).isError, true, 'Cross-instance session IDs cannot deliver input');
   const [actionA, actionB] = await Promise.all([a('act', sequence(readyA)), b('act', sequence(readyB))]);

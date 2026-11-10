@@ -83,7 +83,7 @@ test('stdio MCP batches native pause, save, resume and load with input and scree
     { type: 'click', x: 100, y: 100 }, { type: 'pause' }, { type: 'screenshot' },
     { type: 'load', id: 3 }, { type: 'screenshot' }, { type: 'resume' },
   ];
-  const args = { session_id, request_id: 'native-checkpoint-and-restore', actions, after_ms: 0 };
+  const args = { session_id, request_id: 'native-checkpoint-and-restore', actions };
   const result = await call('act', args);
   assert.ok(!result.isError, result.content[0].text);
   const { action, screenshots } = JSON.parse(result.content[0].text);
@@ -96,7 +96,7 @@ test('stdio MCP batches native pause, save, resume and load with input and scree
     undefined, { tick: 0, paused: false },
   ]);
   assert.deepEqual(screenshots.map(frame => frame.step), [5, 7]);
-  assert.equal(result.content.filter(item => item.type === 'image').length, 3);
+  assert.equal(result.content.filter(item => item.type === 'image').length, 2);
   assert.equal((await read('act', args)).replayed, true);
   assert.equal((await read('status')).actionSequences, 1);
 });
@@ -125,7 +125,7 @@ test('stdio MCP steps timing-only engines and rejects unsupported saves before i
   assert.equal(read(rejected).control, 'save');
   assert.equal(read(await call('telemetry', { session_id })).room.id, 17);
 
-  const stepped = await call('act', { session_id, request_id: 'step', after_ms: 0, actions: [
+  const stepped = await call('act', { session_id, request_id: 'step', actions: [
     { type: 'pause' }, { type: 'wait_ticks', ticks: 3 }, { type: 'resume' },
     { type: 'click', x: 50, y: 50 }, { type: 'pause' },
   ] });
@@ -185,6 +185,7 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
     actions: [{ type: 'click', x: 100, y: 100 }, { type: 'wait', milliseconds: 400 }] });
   assert.equal(action.isError, false);
   assert.equal(JSON.parse(action.content[0].text).action.completed, 2);
+  assert.equal(action.content.length, 1, 'Input-only batches return a receipt without an image');
   const review = await call('observe', { source: 'history', seconds: 10, count: 3 });
   assert.ok(review.content.some(item => item.type === 'image'));
   assert.equal((await call('observe', { source: 'frames', frame_ids: [frame.id] })).content[1].type, 'image');
@@ -196,14 +197,19 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
   assert.equal(viewerStatus.sessionId, launch.sessionId);
   assert.equal(viewerStatus.phase, 'ready');
   assert.equal((await call('observe', { source: 'frames', frame_ids: [frame.id] })).content[1].type, 'image');
-  const capturesRequest = { session_id: launch.sessionId, request_id: 'hover-survey', after_ms: 0,
+  const capturesRequest = { session_id: launch.sessionId, request_id: 'hover-survey',
     actions: [{ type: 'move', x: 100, y: 100 }, { type: 'wait', milliseconds: 100 }, { type: 'screenshot' },
       { type: 'move', x: 200, y: 200 }, { type: 'screenshot' }] };
   const captures = await call('act', capturesRequest);
   const captureResult = JSON.parse(captures.content[0].text);
   assert.equal(captures.isError, false);
   assert.deepEqual(captureResult.screenshots.map(frame => frame.step), [2, 4]);
-  assert.equal(captures.content.filter(item => item.type === 'image').length, 3, 'Two explicit captures plus the final frame');
+  assert.equal(captures.content.filter(item => item.type === 'image').length, 2);
+  const capturesMetadata = [captures.content[1], captures.content[3]].map(item => JSON.parse(item.text));
+  assert.ok(capturesMetadata[1].monotonicMs >= capturesMetadata[0].monotonicMs);
+  assert.ok(capturesMetadata.every(item => Number.isFinite(Date.parse(item.timestamp))));
+  assert.deepEqual(capturesMetadata.map(item => item.id),
+    captureResult.action.steps.filter(step => step.type === 'screenshot').map(step => step.frameId));
   assert.deepEqual(captureResult.action.steps.filter(step => step.type === 'screenshot').map(step => step.state), ['captured', 'captured']);
   const replay = await call('act', capturesRequest);
   assert.equal(JSON.parse(replay.content[0].text).replayed, true);

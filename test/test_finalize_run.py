@@ -127,6 +127,34 @@ class FinalizationTests(unittest.TestCase):
         self.assertEqual(stats["source"]["records"], len(finished))
         self.assertNotIn("Later private follow-up", (Path(state["archive"]) / "trajectory.jsonl").read_text())
 
+    def test_mlflow_flush_recovers_from_outage_and_skips_sent_archives(self):
+        self.source(fixture(complete=True))
+        config = ("http://127.0.0.1:5000", "example-host", "AgentSCUMM")
+        with patch.object(FINAL.MLFLOW, "load_config", side_effect=AssertionError("Finalization reads MLflow config")):
+            state = FINAL.finalize(self.request)
+        self.assertEqual(state["status"], "completed")
+        self.assertTrue(state["verified"])
+        self.assertTrue(state["benchmark_added"])
+        self.assertEqual(state["mlflow"]["status"], "pending")
+        archive, _ = FINAL.EXPORT.export_run(self.rollout, "synthetic-game", repo=self.repo, run_id="partial")
+        sent = {"status": "published", "experiment_id": "1", "run_id": "mlflow-run"}
+        with patch.object(FINAL.MLFLOW, "load_config", return_value=config), patch.object(
+                FINAL.MLFLOW, "publish", side_effect=[FINAL.MLFLOW.TrackingUnavailable("Offline"), sent, sent]
+        ) as publish:
+            self.assertEqual(FINAL.mlflow_queue(self.repo, status_only=True)["pending"], 2)
+            publish.assert_not_called()
+            self.assertFalse((self.repo / ".internal/mlflow").exists())
+            offline = FINAL.mlflow_queue(self.repo)
+            self.assertEqual((offline["failed"], offline["pending"]), (1, 2))
+            self.assertEqual(publish.call_count, 1)
+            self.assertEqual(FINAL.mlflow_queue(self.repo)["sent"], 2)
+            self.assertEqual(FINAL.mlflow_queue(self.repo, archive=archive)["sent"], 0)
+            self.assertEqual(FINAL.mlflow_queue(self.repo, status_only=True)["pending"], 0)
+            self.assertEqual(publish.call_count, 3)
+        with patch.object(FINAL.MLFLOW, "load_config", return_value=(*config[:2], "Other")):
+            self.assertEqual(FINAL.mlflow_queue(self.repo, status_only=True)["pending"], 2)
+        self.assertEqual(self.state(), state)
+
     def test_regenerated_archive_counts_local_actions_and_refreshes_benchmark(self):
         self.source(fixture(complete=True))
         previous = FINAL.finalize(self.request)

@@ -41,16 +41,16 @@ try {
   await saveImage(observed, 'initial.jpg');
   const sequence = { session_id: launched.sessionId, request_id: 'live-controls', frame_id: frame.id,
     actions: [{ type: 'move', x: Math.floor(frame.width / 2), y: Math.floor(frame.height / 2) }, { type: 'screenshot' }, { type: 'click', x: Math.floor(frame.width / 2), y: Math.floor(frame.height / 2) },
-      { type: 'wait', milliseconds: 1500 }, { type: 'key', key: 'F5' }, { type: 'wait', milliseconds: 500 }] };
+      { type: 'wait', milliseconds: 1500 }, { type: 'key', key: 'F5' }, { type: 'wait', milliseconds: 500 }, { type: 'screenshot' }] };
   const acted = await call('act', sequence);
   assert.equal(acted.isError, false, acted.content[0].text);
-  assert.equal(info(acted).screenshots.length, 1);
+  assert.equal(info(acted).screenshots.length, 2);
   assert.equal(acted.content.filter(item => item.type === 'image').length, 2);
   await saveImage(acted, 'after-input.jpg');
   const repeated = info(await call('act', sequence));
   assert.equal(repeated.replayed, true);
   const exitMenu = await call('act', { session_id: launched.sessionId, request_id: 'live-dismiss-menu',
-    actions: [{ type: 'key', key: 'Escape' }, { type: 'wait', milliseconds: 1200 }] });
+    actions: [{ type: 'key', key: 'Escape' }, { type: 'wait', milliseconds: 1200 }, { type: 'screenshot' }] });
   assert.equal(exitMenu.isError, false);
   await saveImage(exitMenu, 'after-menu.jpg');
   const history = await call('observe', { source: 'history', seconds: 10, count: 4 });

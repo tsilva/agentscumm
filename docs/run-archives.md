@@ -33,7 +33,7 @@ python3 -B scripts/export-run.py \
 
 Use the ending evidence actually observed in `--completion-note`. The exporter checks that the latest recorded turn finished, but does not infer a game victory from a conversation finishing. For a preparatory snapshot, omit `--status completed` and use a distinct `--run-id`; its status remains `in_progress`. Existing archives are never overwritten. Exporting reads a bounded source snapshot and does not connect to, stop, or restart the game.
 
-For an unfinished attempt, use `in_progress`, `stopped`, or `blocked` status. The exporter automatically saves the latest verified milestone sample at the rollout cutoff as `verified_progress` when it finds a matching AgentSCUMM session log. This includes the count, total, latest milestone, session ID, sample time, and ScummWEB map revision when recorded. For a run played through the local MCP client, use its working run ID with `--run-id`, or pass the working directory's startup declaration with `--agent-context`, so the exporter can find the local client's session records.
+For an unfinished attempt, use `in_progress`, `stopped`, or `blocked` status. For any status, the exporter saves the latest verified milestone sample at the rollout cutoff as `verified_progress` when it finds a matching AgentSCUMM session log. This includes the count, total, latest milestone, session ID, sample time, and ScummWEB map revision when recorded. A checklist sample can report `won: true` and 100% even if some milestone IDs were never verified. For a run played through the local MCP client, use its working run ID with `--run-id`, or pass the working directory's startup declaration with `--agent-context`, so the exporter can find the local client's session records.
 
 If progress telemetry is unavailable, `--estimated-progress 40` supplies an optional estimate stored as `estimated_progress_percent` (0–100). Completed exports record 100 percent. Register any verified archive with `python3 -B scripts/finalize-run.py register /path/to/archive` to add its status and measurements to the comparison table. Only completed archives receive a checkmark.
 
@@ -72,6 +72,67 @@ pnpm test:export
 ```
 
 Verification checks the trajectory checksum and record count, image checksums and references, the skill manifest and file inventory, and initial prompt asset references and copies. It also recomputes recorded token totals and prices from the trajectory and saved rates. Verification works without network access or the original skill or asset files. New archives use schema version 3 in `run.json`; older versions 1 and 2, including those named `stats.json`, remain verifiable with their original coverage limits. Archives contain the complete recorded conversation and remain private local files under ignored `runs/`.
+
+## MLflow comparisons
+
+Run archives are the local MLflow queue. Finalization saves them by default,
+including when the tracker is offline. The flush scans `runs/` for completed
+runs and exported partial attempts. To inspect local delivery state, flush
+pending archives, or send just one:
+
+```sh
+python3 -B scripts/finalize-run.py flush-mlflow --status
+python3 -B scripts/finalize-run.py flush-mlflow
+python3 -B scripts/finalize-run.py publish-mlflow runs/GAME_ID/YYYYMMDD-RUN_ID
+```
+
+The flush verifies each pending archive before sending it and records a receipt
+under `.internal/mlflow/` after MLflow accepts it. Later flushes skip archives
+with receipts for the selected destination. A transport outage leaves the
+remaining archives pending. Retry the same command after connectivity returns.
+MLflow reuses the same run identity after a partial delivery. The status
+command reads local receipts without contacting MLflow. `finalization.json`
+records the state at export time. Use the status command for current delivery
+state and remote run IDs.
+
+Create the ignored `.local/mlflow.json` in the AgentSCUMM checkout. For an
+operator host with a private MLflow listener, specify the managed SSH alias
+and the tracking URI as seen on that host:
+
+```json
+{
+  "tracking_uri": "http://127.0.0.1:5000",
+  "ssh_host": "tracking-host",
+  "experiment": "AgentSCUMM"
+}
+```
+
+This route uses SSH and `curl` on the operator host. For direct access omit
+`ssh_host` and use an HTTPS endpoint, or loopback HTTP for local testing.
+The endpoint must already permit writes and use MLflow-proxied artifact
+storage. `MLFLOW_TRACKING_URI`, `AGENTSCUMM_MLFLOW_SSH_HOST`, and
+`MLFLOW_EXPERIMENT_NAME` override the corresponding fields. Local capture works
+without a tracking URI.
+
+In MLflow, select runs for the same game, map revision and baseline progress.
+Chart `actions_at_progress_percent` against **Step**. Each point counts the
+submitted primitive actions when that percentage was first observed. Lower
+values at the same step indicate fewer actions. The curve charges the entire
+batch when submitted, including rejected calls, waits and explicit screenshot
+steps, in line with the archive's submission counts. Disposable sessions with a
+recorded `preflight-` scope are excluded. A restore may reduce current progress
+but keeps the original first-observed points. Percentages skipped by the
+tracker, unsupported games, mixed map revisions and missing action timestamps
+leave gaps. A declared progress estimate never becomes a curve point.
+
+Compare the run totals for action sequences, total/input/output tokens, cached
+and uncached input, reasoning tokens, request count and available API-equivalent
+cost. Token totals cover the recorded Codex conversation, including setup.
+When submission timestamps are available, `actions_in_sequence` uses the
+sequence number as its step and `action-sequences.json` preserves the ordered
+action types. The projection sends aggregate metadata and action types only.
+Full prompts, screenshots, keystroke values and the rollout stay in the local
+archive. Older archives can still send their measured totals.
 
 ## Token pricing
 

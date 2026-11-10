@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 const coordinate = z.number().finite().nonnegative();
 const saveId = z.number().int().min(1).max(999);
+export const ACTION_TIMEOUT_MS = 50_000;
+export const ACTION_REPLY_TIMEOUT_MS = 60_000;
 export const nativeActions = new Set(['pause', 'resume', 'wait_ticks', 'save', 'load']);
 export const actionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('click'), x: coordinate, y: coordinate,

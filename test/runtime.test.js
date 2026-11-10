@@ -5,7 +5,44 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { GameRuntime } from '../src/runtime.js';
+import { ACTION_TIMEOUT_MS } from '../src/actions.js';
 import { startFixture } from './fixture.js';
+
+test('action deadline returns captured frames and skips the remaining inputs', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const runtime = new GameRuntime({ viewer: false });
+  const bounds = { x: 0, y: 0, width: 100, height: 100 };
+  runtime.sessionId = 'test-session';
+  runtime.assertReady = async () => {};
+  runtime.gameGeometry = async () => ({ captureBounds: bounds });
+  runtime.canvas = { boundingBox: async () => bounds, focus: async () => {} };
+  runtime.log = async () => {};
+  runtime.capture = async reason => runtime.history.add(Buffer.from('frame'), { reason, step: runtime.currentStep });
+  const waitStarted = Promise.withResolvers();
+  const executed = [];
+  runtime.execute = async (action, _bounds, signal) => {
+    executed.push(action.type);
+    await new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      waitStarted.resolve();
+    });
+  };
+  const request = { session_id: runtime.sessionId, request_id: 'deadline',
+    actions: [{ type: 'screenshot' }, { type: 'wait', milliseconds: 500 }, { type: 'click', x: 25, y: 25 }] };
+  const pending = runtime.act(request);
+  await waitStarted.promise;
+  t.mock.timers.tick(ACTION_TIMEOUT_MS);
+  const result = await pending;
+  assert.equal(result.action.state, 'failed');
+  assert.equal(result.action.code, 'ACTION_TIMEOUT');
+  assert.equal(result.action.completed, 1);
+  assert.deepEqual(result.action.steps.map(step => step.state), ['captured', 'interrupted', 'skipped']);
+  assert.deepEqual(executed, ['wait']);
+  assert.equal(result.screenshots.length, 1);
+  assert.equal(result.action.steps[0].frameId, result.screenshots[0].id);
+  assert.equal((await runtime.act(request)).replayed, true);
+  assert.deepEqual(executed, ['wait']);
+});
 
 test('owned Chromium, reliable inputs, viewer isolation and rolling history', { timeout: 60000 }, async t => {
   const fixture = await startFixture();
@@ -21,10 +58,10 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   assert.equal(first.width, 640); assert.equal(first.height, 480);
   assert.ok(first.data.length > 1000);
   const request = { session_id: started.sessionId, request_id: 'first', frame_id: first.id,
-    actions: [{ type: 'click', x: 200, y: 120 }, { type: 'key', key: 'a' }, { type: 'wait', milliseconds: 100 }], after_ms: 0 };
+    actions: [{ type: 'click', x: 200, y: 120 }, { type: 'key', key: 'a' }, { type: 'wait', milliseconds: 100 }] };
   const acted = await runtime.act(request);
   assert.equal(acted.action.state, 'completed'); assert.equal(acted.action.completed, 3);
-  assert.ok(acted.frame.monotonicMs > first.monotonicMs);
+  assert.deepEqual(acted.screenshots, []);
   const countInputs = () => runtime.shell.evaluate(() => events.filter(e => e.type === 'mousedown').length);
   assert.equal(await countInputs(), 1);
   assert.equal(runtime.status().actionSequences, 1, 'One sequence counts once regardless of its steps');
@@ -62,7 +99,7 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   };
   const beforeShift = await countInputs();
   const shifted = await runtime.act({ session_id: started.sessionId, request_id: 'geometry-during-sequence',
-    actions: [{ type: 'key', key: 'c' }, { type: 'click', x: 20, y: 20 }], after_ms: 0 });
+    actions: [{ type: 'key', key: 'c' }, { type: 'click', x: 20, y: 20 }] });
   assert.equal(shifted.action.state, 'failed');
   assert.match(shifted.action.error, /geometry changed/);
   assert.equal(await countInputs(), beforeShift, 'A changed crop must not receive a stale coordinate input');
@@ -143,6 +180,7 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   assert.equal(failed.action.state, 'failed'); assert.equal(failed.action.completed, 1);
   await runtime.viewer.page.waitForFunction(count => document.getElementById('actions').textContent === String(count), runtime.status().actionSequences);
   assert.equal(failed.action.steps[1].state, 'delivery-uncertain');
+  assert.equal(failed.action.steps[2].state, 'skipped');
   const afterFailure = await countInputs();
   assert.equal((await runtime.act(partial)).replayed, true);
   assert.equal(await countInputs(), afterFailure);
@@ -155,7 +193,7 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
     if (reason === 'sequence-screenshot') captureClicks.push(await countInputs());
     return capture(reason);
   };
-  const survey = { session_id: started.sessionId, request_id: 'capture-order', after_ms: 0,
+  const survey = { session_id: started.sessionId, request_id: 'capture-order',
     actions: [{ type: 'screenshot' }, { type: 'click', x: 200, y: 120 }, { type: 'screenshot' }] };
   const beforeSurvey = await countInputs();
   const surveyed = await runtime.act(survey);
@@ -209,9 +247,9 @@ test('owned Chromium, reliable inputs, viewer isolation and rolling history', { 
   const pending = runtime.act({ session_id: runtime.sessionId, request_id: 'shutdown-wait',
     actions: [{ type: 'wait', milliseconds: 10000 }] });
   for (let attempt = 0; attempt < 200 && !runtime.actions.some(action =>
-    action.requestId === 'shutdown-wait' && action.steps.some(step => step.type === 'wait')); attempt++) await sleep(10);
+    action.requestId === 'shutdown-wait' && action.steps.some(step => step.state === 'issuing')); attempt++) await sleep(10);
   assert.ok(runtime.actions.some(action => action.requestId === 'shutdown-wait' &&
-    action.steps.some(step => step.type === 'wait')), 'Wait for the input wait to start before testing its interruption');
+    action.steps.some(step => step.state === 'issuing')), 'Wait for the input wait to start before testing its interruption');
   const shutdownStarted = Date.now();
   await runtime.close();
   assert.equal((await pending).action.state, 'failed');

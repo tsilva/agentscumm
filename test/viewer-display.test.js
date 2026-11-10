@@ -86,7 +86,7 @@ test('screenshots and spectator share game-only geometry across resolutions, bla
     else assert.ok(pixels.corner.slice(0, 3).every(value => value < 10), 'Black game scenes retain their full geometry');
     const input = await runtime.act({ session_id: runtime.sessionId, request_id: 'crop-' + frame.id, frame_id: frame.id,
       actions: [{ type: 'move', x: 21, y: 29 }, { type: 'click', x: 23, y: 31 },
-        { type: 'drag', from_x: 25, from_y: 33, x: 27, y: 35 }], after_ms: 0 });
+        { type: 'drag', from_x: 25, from_y: 33, x: 27, y: 35 }, { type: 'screenshot' }] });
     assert.equal(input.action.state, 'completed');
     const events = await runtime.shell.evaluate(() => cropEvents.splice(0));
     const offsetX = expected.x - 10, offsetY = expected.y - 20;
@@ -95,7 +95,7 @@ test('screenshots and spectator share game-only geometry across resolutions, bla
       [{ x: offsetX + 23, y: offsetY + 31 }, { x: offsetX + 25, y: offsetY + 33 }]);
     assert.deepEqual(events.filter(event => event.type === 'mouseup').at(-1),
       { type: 'mouseup', x: offsetX + 27, y: offsetY + 35 });
-    await runtime.viewer.page.waitForFunction(id => lastId === id, input.frame.id);
+    await runtime.viewer.page.waitForFunction(id => lastId === id, input.screenshots[0].id);
     const actual = await runtime.viewer.page.locator('#screen').evaluate(canvas => ({ width: canvas.width, height: canvas.height,
       corner: [...canvas.getContext('2d').getImageData(2, 2, 1, 1).data] }));
     assert.equal(actual.width, expected.width); assert.equal(actual.height, expected.height);
