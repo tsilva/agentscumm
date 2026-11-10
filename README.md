@@ -34,7 +34,7 @@ $agentscumm_play-game Flight of the Amazon Queen
 
 Commit all checkout changes before starting or resuming play. The skill stops on staged, unstaged, or untracked changes; once the checkout is clean, it immediately creates the working run folder with the verified commit recorded in `run.json`.
 
-Before gameplay, the skill synchronizes the current branch and verifies that the MCP loaded that clean revision. Codex handles stale-server restarts and uses the included local MCP client automatically if the attached connection is unavailable; see [usage and controls](docs/usage.md#play-game-skill).
+Before gameplay, the skill synchronizes the current branch and verifies that the MCP loaded that clean revision. Codex connects to the server through its built-in MCP client. Reload a stale connection in Codex and verify the server revision before playing. See [usage and controls](docs/usage.md#play-game-skill).
 
 AgentSCUMM can launch games with a [fixed screenshot crop](docs/usage.md#tools). Flight of the Amazon Queen and Elvira II are configured.
 

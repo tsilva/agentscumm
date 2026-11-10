@@ -17,8 +17,8 @@ Parallel-instance coverage starts independent stdio MCP servers with automatic p
 Evaluator coverage tests typed stop predicates, pending room transitions, brief
 visits retained between polls, missing telemetry, active-wait interruption,
 blocked post-goal inputs, cached partial results, private telemetry, result
-receipts, zero exit status on success, and Play Game client shutdown. Run the
-focused checks with `node --test test/evaluation.test.js test/play-game-client.test.js`.
+receipts and zero server exit status on success. Run the focused checks with
+`node --test test/evaluation.test.js`.
 Game variable coverage also verifies ordered writes between polls, save
 baselines, invalid providers and slots, and the matching snapshot in a
 launcher receipt.
@@ -50,7 +50,7 @@ needs continuous progress reporting during the migration.
 
 `pnpm test:live` launches Flight of the Amazon Queen on the configured live site through stdio MCP, opens the spectator, checks screenshot dimensions, exercises click/key/wait sequences and retry behavior, and retrieves frame history. It uses an isolated temporary profile and closes its browser processes afterward. It does not solve the game. Local verification captures stay under ignored `.internal/`.
 
-Runtime code is in `src/`: `index.js` exposes MCP, `runtime.js` owns the game lifecycle and controls, `health.js` observes mechanical runtime failures, `viewer.js` serves the spectator, `macos-app.js` builds and manages the native spectator, `history.js` bounds visual history, and `actions.js` validates and serializes input. `display.js` observes render geometry for shared screenshot and spectator cropping; tests cover pillarboxing, letterboxing, widescreen and portrait games, black scenes, menus and native window aspect changes. The macOS app source and bundle metadata are in `macos/`. ScummWEB remains the separate browser game runtime; this project does not copy its game payloads.
+Runtime code is in `src/`: `index.js` exposes MCP, `runtime.js` owns the game lifecycle and controls, `health.js` observes mechanical runtime failures, `viewer.js` serves the spectator, `macos-app.js` builds and manages the native spectator, `history.js` bounds visual history, and `actions.js` validates and serializes input. `display.js` defines fixed crops shared by screenshots, the spectator and input. The macOS app source and bundle metadata are in `macos/`. ScummWEB remains the separate browser game runtime; this project does not copy its game payloads.
 
 Dependency policy uses pnpm's seven-day minimum release age and blocks exotic transitive dependency sources. Lifecycle scripts are disabled; browser installation is an explicit step.
 

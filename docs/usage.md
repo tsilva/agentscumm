@@ -57,8 +57,7 @@ node src/index.js --instance laundry-trial \
 
 Launch the game through the usual MCP `session` tool after connecting. Each
 trial needs fresh output paths. With no explicit paths, files are placed inside
-that instance's data directory. The Play Game local MCP client forwards these
-same four options and ends when its server stops.
+that instance's data directory. Set these flags on the AgentSCUMM MCP server command in Codex.
 
 Conditions are a nonempty `all` list of typed predicates. Room conditions
 accept `engine_id` (string), `room_id` (integer), `room_name` (string), and
@@ -259,9 +258,9 @@ mkdir -p "$HOME/.codex/skills"
 ln -s "$PWD/.agents/skills/agentscumm_play-game" "$HOME/.codex/skills/agentscumm_play-game"
 ```
 
-Before play, the skill requires a clean checkout, synchronizes its current branch with the configured upstream, and compares that full commit with `status.sourceRevision.commit_id`. The MCP must report the matching AgentSCUMM revision and a clean startup. The agent handles stale-server restarts and reconnection itself, preserving configuration and saves, then verifies the replacement. If the attached connection is unavailable or cannot reconnect, the skill automatically uses its existing local MCP client without further approval. That client starts the same MCP server, records calls and screenshots, and uses an isolated browser profile under the run directory; it does not inherit another profile's saves. See the [local-client procedure](../.agents/skills/agentscumm_play-game/references/local-mcp-client.md). Preserve unrelated sessions. A newly started process alone does not prove MCP or game readiness. Concrete local-client failures or unverifiable provenance block play; `session(operation="start", restart=true)` restarts only the game. Restarting the MCP ends its active game session, so save progress first. Without a remote or on detached HEAD, the intended latest revision must be established before playing.
+Before play, the skill requires a clean checkout synchronized with its configured upstream. Compare the full commit with `status.sourceRevision.commit_id` from Codex's built-in MCP connection. The MCP must report that revision and a clean startup. Reload a stale server through Codex, preserving saves and launch settings, and verify the replacement before sending input. See [Codex MCP setup and recovery](../.agents/skills/agentscumm_play-game/references/codex-mcp.md).
 
-The gameplay skill interacts with games only through AgentSCUMM MCP tools, using the attached connection or the maintained local MCP client. Backend selection and implementation belong to the server; process and connection management support revision checks and recovery. A failed desktop connection alone is not a gameplay blocker when the local client works. Local run records and web research, including walkthroughs, remain available to support gameplay. Resume can restore only progress saved by the game.
+Use AgentSCUMM's MCP tools for all gameplay input and observations. Local run records and web research, including walkthroughs, remain available to support gameplay. Resume can restore only progress saved by the game.
 
 The [MCP preflight](../.agents/skills/agentscumm_play-game/SKILL.md#test-mcp-tools-before-play) checks the exposed tools and native controls in a disposable session. A failed check stops play and reports the failing operation. A pass restarts into the requested opening or saved run. A separate test profile protects live sessions with unsaved progress.
 
@@ -324,9 +323,9 @@ A batch reply contains ordered `steps`. An empty object means the step completed
 
 A failed batch includes an error and labels unfinished steps, such as `skipped` or `delivery-uncertain`. The browser can receive an input without the game performing the intended action. End the batch with a screenshot when you need to check what the game did.
 
-Wait on the original call for its receipt. When the server's 50-second deadline stops the batch, it returns `{"error":"ACTION_TIMEOUT"}`. The local client waits up to 60 seconds. If the reply is missing or you need details after a timeout, call `status` with `session_id` and `request_id`. Add `include_images: true` to recover the batch's explicit captures. An `unknown` request has no recorded attempt. An `expired` request was used but its receipt has left the cache.
+Wait on the original call for its receipt. When the server's 50-second deadline stops the batch, it returns `{"error":"ACTION_TIMEOUT"}`. Allow at least 60 seconds for Codex to receive the reply. If the reply is missing or you need details after a timeout, call `status` with `session_id` and `request_id`. Add `include_images: true` to recover the batch's explicit captures. An `unknown` request has no recorded attempt. An `expired` request was used but its receipt has left the cache.
 
-The server keeps the last 100 receipts within the current game session. Reusing the same request ID with identical actions returns the cached reply and sets `replayed: true`. For a request that never reached the server, resubmission can execute it. Use a new request ID for new input. Session and frame IDs are short random handles. The local client generates a short random request ID when omitted and reports it with the reply. A new game launch creates a new session ID and clears its request history.
+The server keeps the last 100 receipts within the current game session. Reusing the same request ID with identical actions returns the cached reply and sets `replayed: true`. For a request that never reached the server, resubmission can execute it. Use a new request ID for new input. Session and frame IDs are short random handles. Supply a unique request ID with each batch. A new game launch creates a new session ID and clears its request history.
 
 ### Native game time and saves
 

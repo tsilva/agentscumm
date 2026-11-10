@@ -31,7 +31,7 @@ the trial's `review.json`, hashing the exact receipt and its referenced image:
 ```
 
 Missing/false reviews never win. Success also requires the exact room-71/ready
-predicate and variables, client exit 0 and confirmed client/server exit, matching
+predicate and variables, Codex exit 0 and confirmed Codex/server exit, matching
 session/revision/call count, and no action starts after success. A final action
 can be `completed` when background monitoring detects arrival after it returned;
 `stopped` is expected only when a batch was still active.

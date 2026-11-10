@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import secrets
 import subprocess
+import uuid
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
@@ -151,10 +152,14 @@ def init_round(repo, args, probe=probe_provider):
         trial = Path(item["directory"])
         (trial / "strategy.md").write_bytes(content)
         (trial / "common-context.md").write_bytes(common)
-        write_json(trial / "client-args.json", ["--run-dir", str(trial), "--base-url", provider["origin"],
-                   "--evaluation-log", str(trial / "variables.jsonl"),
-                   "--result-file", str(trial / "result.json"), "--telemetry-ms", "250",
-                   "--stop-condition", json.dumps(CONDITION, separators=(",", ":"))])
+        server_args = [str(repo / "src/index.js"), "--data-dir", str(trial / "browser"),
+                       "--run-id", str(uuid.uuid4()), "--base-url", provider["origin"],
+                       "--evaluation-log", str(trial / "variables.jsonl"),
+                       "--result-file", str(trial / "result.json"), "--telemetry-ms", "250",
+                       "--stop-condition", json.dumps(CONDITION, separators=(",", ":"))]
+        write_json(trial / "codex-args.json", ["--ignore-user-config", "--ephemeral", "--json", "-c",
+                   f'mcp_servers.agentscumm={{command="node", args={json.dumps(server_args, ensure_ascii=False)}, '
+                   'required=true, tool_timeout_sec=60}'])
     return {"round_directory": str(round_dir), "trials": round_data["trials"],
             "state": "prepared", "players_started": False}
 
@@ -222,7 +227,8 @@ def measure_trial(item, round_data, repo):
         result.update(total_actions=sum(counts.values()), actions_by_type=dict(counts),
                       action_sequences=len(starts), attempted_steps=len(executed),
                       delivered_steps=sum(s.get("state") in ("delivered", "captured") for s in executed),
-                      explicit_wait_ms=sum(a.get("milliseconds", 0) for r in starts for a in r["inputs"] if a["type"] == "wait"))
+                      explicit_wait_ms=sum(a.get("ms", a.get("milliseconds", 0))
+                                           for r in starts for a in r["inputs"] if a["type"] == "wait"))
         events_path = safe(trial / "events.jsonl", trial)
         if events_path.exists():
             events = rows(events_path)
@@ -239,8 +245,8 @@ def measure_trial(item, round_data, repo):
                 "Wrong native endpoint")
         require(receipt["session_id"] == launch["sessionId"] and receipt["source_revision"] == revision, "Receipt provenance mismatch")
         require(receipt["action_sequences"] == len(starts) and starts, "Receipt action count mismatch")
-        require(type(worker.get("client_exit_code")) is int and worker["client_exit_code"] == 0,
-                "Missing or unsuccessful client exit")
+        exit_code = worker.get("codex_exit_code", worker.get("client_exit_code"))
+        require(type(exit_code) is int and exit_code == 0, "Missing or unsuccessful player exit")
         detected = timestamp(receipt["detected_at"])
         require(timestamp(dispatch["dispatched_at"]) <= detected <= timestamp(dispatch["deadline"]),
                 "Success occurred outside the trial's wall-time budget")

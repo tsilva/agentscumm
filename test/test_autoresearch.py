@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -112,8 +113,14 @@ class ResearchTests(unittest.TestCase):
             manifest = research.read_json(trial / "run.json")
             self.assertEqual(manifest["git"]["play_start"]["commit_id"], self.commit)
             self.assertFalse((trial / "browser").exists())
-            args = research.read_json(trial / "client-args.json")
-            self.assertNotIn("--no-viewer", args, "Every trial must retain the client's visible spectator default")
+            codex_args = research.read_json(trial / "codex-args.json")
+            self.assertIn("--ephemeral", codex_args)
+            config = tomllib.loads(codex_args[codex_args.index("-c") + 1])["mcp_servers"]["agentscumm"]
+            self.assertEqual(config["command"], "node")
+            self.assertTrue(config["required"])
+            args = config["args"]
+            self.assertEqual(Path(args[args.index("--data-dir") + 1]), trial / "browser")
+            self.assertNotIn("--no-viewer", args, "Every trial must retain the server's visible spectator default")
             self.assertEqual(json.loads(args[args.index("--stop-condition") + 1]), research.CONDITION)
         with self.assertRaises(ValueError):
             research.dispatch_trial(self.round_dir, "missing", self.repo)

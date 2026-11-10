@@ -89,7 +89,7 @@ fewer can run. Do not replace a failed trial with an unreported fourth.
 Each trial owns its own MCP process, profile, run directory, memory, screenshots,
 logs, and request IDs. Never share the attached MCP connection or an in-use profile.
 Each trial must open its own **visible AgentSCUMM spectator window**. The helper
-leaves the client's default viewer enabled; never add `--no-viewer`. After game
+leaves the server's default viewer enabled; never add `--no-viewer`. After game
 startup, require `status.viewerOpen: true` and no `viewerError`. If needed, use
 `session(operation="open_viewer")` and check status again. An unavailable spectator
 is an infrastructure failure; do not silently continue hidden or use browser
@@ -109,14 +109,10 @@ in the workspace and must preserve others' files. They may not delegate or edit
 tracked files. Record the returned agent IDs against their trials. Do not send
 gameplay hints mid-trial.
 
-Include the worker contract's stdin-preserving client launch example in each
-dispatch. Require a persistent PTY and a successful `status` response through
-the same live connection before game launch. Do not supply the Python launcher
-through a heredoc: the client inherits that exhausted stdin and closes before
-it can receive MCP requests.
-
-Each trial's `client-args.json` configures the maintained Play Game
-`scripts/mcp-client.mjs`, explicitly including this endpoint:
+Include the worker contract's Codex launch example in each dispatch. Each
+trial's `codex-args.json` configures the AgentSCUMM stdio server in its own
+Codex process. Require a successful `status` response through that connection
+before gameplay. The server arguments include this endpoint:
 
 ```json
 {"all":[{"variable":"engine_id","equals":"queen"},{"variable":"room_id","equals":71},{"variable":"room_ready","equals":true}]}
@@ -130,8 +126,8 @@ enforced isolation from unrestricted filesystem/browser access; disclose this
 limitation rather than claiming the evaluator is inaccessible.
 
 Wait while monitoring deadlines. On timeout the worker closes only its owned
-client and records `timeout`. If necessary interrupt the worker and close its
-exact owned client after checking process ownership. Verify that its recorded
+Codex process and records `timeout`. If necessary interrupt the worker and close
+its exact owned Codex process after checking process ownership. Verify that its recorded
 server PID also exited; if orphaned, stop only that verified owned server.
 Preserve partial evidence.
 Distinguish infrastructure failures from unsuccessful strategy execution.
@@ -140,7 +136,7 @@ Never erase failed inputs or silently restart for a cleaner score.
 ## Evaluate and report
 
 Follow [the evidence/scoring contract](references/scoring.md). Compute metrics
-from server logs, not agent claims. Check receipts, client exit outcomes, startup
+from server logs, not agent claims. Check receipts, Codex exit outcomes, startup
 revisions, and final screenshots. Independently inspect each claimed-success image
 and bind `review.json` to the receipt and screenshot checksums. This endpoint is
 not game completion: do not queue completed-game finalization or benchmarks.
