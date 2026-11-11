@@ -191,3 +191,5 @@ Round initialization resolves ScummWEB through `scummbench paths`, requires its
 clean checkout, and freezes `backbone_revision`. Trial receipts must match that
 ScummWEB revision. Historical rounds without that field retain their original
 AgentSCUMM provenance contract; never relabel a historical server as ScummWEB.
+
+Before preparing a round, run `pnpm prepare:play` and have the user commit any automatic bump and other changes. The round helper enforces the same version gate and stores AgentSCUMM identity separately from ScummWEB provenance.

@@ -32,6 +32,11 @@ class ResearchTests(unittest.TestCase):
         self.provider = {"origin": "http://localhost:9999", "queen_sha256": "b" * 64,
                          "runtime_assets_sha256": "c" * 64, "source_info_sha256": "d" * 64}
         self.dirty = False
+        identity = patch.object(research, "prepare_agent", return_value={
+            "name": "agentscumm", "version": "1.2.3", "commit_id": self.commit,
+            "branch": "main", "dirty": False, "source": "clean_play_preflight"})
+        identity.start()
+        self.addCleanup(identity.stop)
 
         def fake_git(repo, *args):
             if args == ("rev-parse", "--show-toplevel"):

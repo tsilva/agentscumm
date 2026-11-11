@@ -384,13 +384,14 @@ class FinalizationTests(unittest.TestCase):
         self.assertTrue(FINAL.register_benchmark(second, repo=self.repo, title="Synthetic Adventure"))
         text = path.read_text()
         lines = text.splitlines()
-        position = lines.index(FINAL.BENCHMARK_HEADER)
+        header = FINAL.BENCHMARK_HEADER + " AgentSCUMM version |"
+        position = lines.index(header)
         table = lines[position:position + 4]
-        self.assertEqual(text.count(FINAL.BENCHMARK_HEADER), 1)
+        self.assertEqual(text.count(header), 1)
         self.assertTrue(all(line.startswith("|") for line in table))
         parsed = [[cell.strip() for cell in re.sub(r"<!--.*?-->", "", line).split("|")[1:-1]] for line in table[2:]]
         self.assertEqual(len(parsed), 2)
-        self.assertTrue(all(len(row) == 13 for row in parsed))
+        self.assertTrue(all(len(row) == 14 for row in parsed))
         self.assertEqual(parsed[0][0], "✅")
         self.assertEqual(parsed[0][2], "test-model / high")
         self.assertEqual(parsed[1][2], "comparison-model / high")

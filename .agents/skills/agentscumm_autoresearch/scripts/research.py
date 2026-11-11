@@ -4,6 +4,7 @@ import argparse
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import secrets
@@ -19,6 +20,15 @@ CONDITION = {"all": [{"variable": "engine_id", "equals": "queen"},
                      {"variable": "room_ready", "equals": True}]}
 TYPES = {"click", "move", "key", "drag", "wait", "screenshot"}
 TERMINAL = {"finished", "timeout", "blocked", "infrastructure_failure"}
+
+
+def prepare_agent(repo):
+    spec = importlib.util.spec_from_file_location("agentscumm_prepare_play", ROOT / "scripts/prepare-play.py")
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    revision = helper.prepare(repo)
+    require(revision["ready"], "AgentSCUMM changed; commit the automatic version bump and all changes before play")
+    return {key: revision[key] for key in ("name", "version", "commit_id", "branch", "dirty", "source")}
 
 
 def require(ok, message):
@@ -115,6 +125,7 @@ def clean_backbone():
 
 
 def init_round(repo, args, probe=probe_provider):
+    agent = prepare_agent(repo)
     commit, branch = clean_commit(repo)
     backbone = clean_backbone()
     require(1 <= len(args.strategy) <= 3, "A round has one to three strategies")
@@ -152,6 +163,7 @@ def init_round(repo, args, probe=probe_provider):
         trial.mkdir(mode=0o700)
         write_json(trial / "run.json", {"schema_version": 1, "kind": "working_run", "status": "in_progress",
                    "game_id": GAME, "run_id": trial.name, "started_at": started,
+                   "agent": agent,
                    "git": {"play_start": {"commit_id": commit, "branch": branch,
                            "dirty": False, "source": "clean_play_preflight"}},
                    "run_limit": {"kind": "stop_condition", "condition": CONDITION},

@@ -1,20 +1,24 @@
 {
   "name": "agentscumm",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "type": "module",
   "description": "MCP game controls, spectator viewer, and visual history for ScummWEB",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "start": "node src/index.js",
     "browser:install": "playwright install chromium",
     "build:macos": "node scripts/build-macos-app.js",
-    "test": "node --test test/*.test.js && pnpm test:export && pnpm test:autoresearch",
+    "test": "node --test --test-concurrency=1 test/*.test.js && pnpm test:export && pnpm test:autoresearch && pnpm test:version",
     "test:export": "python3 -B -m unittest discover -s test -p 'test_*run.py' -v",
     "test:autoresearch": "python3 -B -m unittest discover -s test -p test_autoresearch.py -v",
     "test:live": "node scripts/smoke-live.js",
-    "check": "node --check src/index.js && node --check src/server.js && node --check src/runtime.js && node --check src/library.js && node --check src/instances.js && node --check src/health.js && node --check src/display.js && node --check src/audio.js && node --check src/viewer.js && node --check src/history.js && node --check src/actions.js && node --check src/macos-app.js && node --check scripts/build-macos-app.js"
+    "check": "node --check src/index.js && node --check src/server.js && node --check src/runtime.js && node --check src/library.js && node --check src/instances.js && node --check src/health.js && node --check src/display.js && node --check src/audio.js && node --check src/viewer.js && node --check src/history.js && node --check src/actions.js && node --check src/macos-app.js && node --check scripts/build-macos-app.js",
+    "prepare:play": "python3 -B scripts/prepare-play.py",
+    "test:version": "python3 -B -m unittest discover -s test -p test_play_version.py -v"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",

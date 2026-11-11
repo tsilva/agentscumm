@@ -48,6 +48,8 @@ needs continuous progress reporting during the migration.
 
 ## Runtime and verification
 
+`pnpm test` runs Node test files serially to avoid competing browser and native spectator workloads. Tests of parallel sessions still exercise concurrency within their own cases.
+
 Install the editable ScummBench checkout before the MCP tests. For disposable test journals, set `SCUMMBENCH_RUNS_DIR` to a task-owned temporary directory; finalizer tests isolate their ScummBench registry through `SCUMMBENCH_REGISTRY_ROOT`. Neither setting changes normal gameplay defaults.
 
 `pnpm test:live` launches Flight of the Amazon Queen on the configured live site through stdio MCP, opens the spectator, checks screenshot dimensions, exercises click/key/wait sequences and retry behavior, and retrieves frame history. It uses an isolated temporary profile and closes its browser processes afterward. It does not solve the game. Local verification captures stay under ignored `.internal/`.

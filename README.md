@@ -14,7 +14,7 @@ Codex handles puzzle solving and keeps notes between sessions. ScummWEB supplies
 
 **[See current benchmark results in ScummBench →](https://github.com/tsilva/scummbench/blob/main/BENCHMARKS.md)**
 
-[Earlier AgentSCUMM results](BENCHMARKS.md) are preserved as historical records.
+[Earlier AgentSCUMM results](https://github.com/tsilva/scummbench/blob/main/BENCHMARKS.md) are preserved as historical records.
 
 ## Quick start
 
@@ -58,7 +58,7 @@ Walkthroughs are allowed unless you request unaided play. A finished tool call d
 
 ## Results
 
-The first recorded full-game completion is a **walkthrough-assisted Flight of the Amazon Queen** playthrough. [BENCHMARKS.md](BENCHMARKS.md) records its outcome, model, token usage, actions, elapsed time, and comparison limits. It is a development result, not a success-rate estimate.
+The first recorded full-game completion is a **walkthrough-assisted Flight of the Amazon Queen** playthrough. [BENCHMARKS.md](https://github.com/tsilva/scummbench/blob/main/BENCHMARKS.md) records its outcome, model, token usage, actions, elapsed time, and comparison limits. It is a development result, not a success-rate estimate.
 
 ## Guides
 

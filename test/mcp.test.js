@@ -6,7 +6,6 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import packageMetadata from '../package.json' with { type: 'json' };
 import { startFixture } from './fixture.js';
 
 test('stdio MCP requires a fixed crop before launching and accepts crop-relative coordinates', async t => {
@@ -52,7 +51,9 @@ test('opt-in telemetry queries unmapped games without leaking state into player 
   assert.equal((await read('telemetry', { session_id })).state, 'pending');
   const status = await read('status', { wait_ms: 10000 });
   assert.equal(status.phase, 'ready');
-  assert.equal(status.sourceRevision.mcp_version, packageMetadata.version);
+  assert.equal(status.sourceRevision.repository, 'scummweb');
+  assert.equal(status.scummbench.mediated, true);
+  assert.match(status.sourceRevision.mcp_version, /^\d+\.\d+\.\d+/);
   assert.deepEqual(status.sourceRevision.mcp_tools, tools.map(tool => tool.name).sort());
   assert.doesNotMatch(JSON.stringify(status), /room_id|game_identity|sample_time_ms/);
   const metadata = await read('telemetry', { session_id });
@@ -172,8 +173,9 @@ test('stdio MCP returns actual images, sequence outcomes and history', { timeout
   const call = (name, args = {}) => client.callTool({ name, arguments: args });
   const idle = JSON.parse((await call('status')).content[0].text);
   assert.equal(idle.phase, 'idle');
-  assert.equal(client.getServerVersion().version, packageMetadata.version);
-  assert.equal(idle.sourceRevision.mcp_version, packageMetadata.version);
+  assert.equal(idle.sourceRevision.repository, 'scummweb');
+  assert.equal(idle.scummbench.mediated, true);
+  assert.equal(client.getServerVersion().version, idle.sourceRevision.mcp_version);
   assert.deepEqual(idle.sourceRevision.mcp_tools, names);
   assert.ok(JSON.parse((await call('list_games')).content[0].text).games.length > 0);
   assert.equal(JSON.parse((await call('library')).content[0].text).state, 'idle');

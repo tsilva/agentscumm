@@ -31,6 +31,9 @@ CONTEXT_SPEC.loader.exec_module(CONTEXT)
 PRICING_SPEC = importlib.util.spec_from_file_location("agentscumm_run_pricing", ROOT / "scripts/run_pricing.py")
 PRICING = importlib.util.module_from_spec(PRICING_SPEC)
 PRICING_SPEC.loader.exec_module(PRICING)
+AGENT_SPEC = importlib.util.spec_from_file_location("agentscumm_run_agent", ROOT / "scripts/run_agent.py")
+AGENT = importlib.util.module_from_spec(AGENT_SPEC)
+AGENT_SPEC.loader.exec_module(AGENT)
 MIMES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
 DATA_URL = re.compile(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.*)$", re.DOTALL)
 TRUNCATED = re.compile(r"^(.*?)…([0-9]+) chars truncated…(.*?)$", re.DOTALL)
@@ -1151,6 +1154,10 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
             stats["limitations"].append("AgentSCUMM's startup commit was not recorded for this run; the exporter checkout is not a substitute.")
         if any(gap.get("scope") == "unforwarded_mcp_result" for gap in screenshots.unresolved):
             stats["limitations"].append("Some unforwarded MCP screenshots survive only as truncated rollout fragments.")
+        agent_work = work_dir or (Path(agent_context).parent if agent_context else repo / ".internal" / game_id / run_id)
+        agent_identity = AGENT.snapshot(repo, agent_work, staging, game_id, run_id)
+        if agent_identity:
+            stats["agent"] = agent_identity
         if progress:
             stats["verified_progress"] = progress
         if curve:
@@ -1198,6 +1205,7 @@ def verify_run(directory):
                 "Completed runs require 100 percent progress")
     verify_run_progress(stats)
     verify_progress_curve(stats)
+    AGENT.verify(directory, stats.get("agent"))
     if "total_actions" in stats or "total_action_sequences" in stats:
         for key, expected in (("total_actions", sum(stats["actions"].values())),
                               ("total_action_sequences", stats["action_sequences"]["count"])):
