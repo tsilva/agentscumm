@@ -183,3 +183,5 @@ End the round there. Propose next hypotheses if useful and ask whether to run
 another round, but do not create a new round, spawn players, or start games
 until the user explicitly confirms. Confirmation authorizes one new round of
 up to three fresh experiments, never an unbounded loop.
+
+All trial MCP launchers require ScummBench. Before gameplay require `status.scummbench.mediated: true` and record its source revision and run ID. Never launch the internal AgentSCUMM backend as a fallback. Future archived benchmark results register in ScummBench; round-local strategy ranking remains a distinct research report.

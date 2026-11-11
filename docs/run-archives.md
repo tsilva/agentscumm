@@ -143,3 +143,7 @@ The default lookup fetches [current official OpenAI API pricing](https://develop
 For a model or pricing table outside that lookup's coverage, supply `--pricing-rates /path/to/rates.json` to either `export-run.py` or `finalize-run.py queue`. Use the [Price Thread rate-file format](../.agents/skills/agentscumm_price-thread/references/pricing.md), exact observed models, official sources and rates verified on the export date. No model alias or different provider is substituted; the current usage reader supports OpenAI telemetry only.
 
 A lookup failure, unsupported model/tier, stale supplied rates or unresolved cache-write rate saves `api_cost.status: "unavailable"`, a reason and a null price while preserving the archive and measured tokens. A priced archive has `status: "priced"`. Finalization receipts also report pricing status and total, independently of archive completion. Missing pricing must remain visible as unknown, never zero. Existing archives are preserved and are not retroactively repriced. Verification uses the saved rates, so later price changes do not alter an archived result.
+
+## ScummBench ownership
+
+All new gameplay uses the required ScummBench gateway. Automatic and manual finalizer registration delegates to `scummbench register-archive`; the canonical result document and registration receipts belong to ScummBench. AgentSCUMM keeps conversation archives and its existing historical benchmark table. Missing ScummBench fails explicitly; do not register a new local row as a fallback.

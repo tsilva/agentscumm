@@ -7,7 +7,7 @@ description: Play a named ScummWEB adventure through AgentSCUMM's MCP using the 
 
 Use the AgentSCUMM MCP to launch the game the user names and keep playing toward its ending. Codex owns discovery, planning, recovery, and memory. The MCP supplies game controls and observations; do not add puzzle logic to it or build a separate solver for this request.
 
-Use AgentSCUMM through Codex's built-in MCP connection for all gameplay. Use the server's tools for game input and observations. Local files hold run records and saved evidence. Web research, including walkthroughs, is allowed for gameplay guidance.
+Use AgentSCUMM exclusively through ScummBench's gateway on Codex's built-in MCP connection for all gameplay. The normal AgentSCUMM launcher delegates to the globally installed editable `scummbench` command. Require `status.scummbench.mediated: true` and `status.scummbench.results_owner: scummbench` before any game input; missing mediation blocks play. Never start the internal `src/server.js` backend or fall back to direct controls. Use the server's tools for game input and observations. Local files hold run records and saved evidence. Web research, including walkthroughs, is allowed for gameplay guidance.
 
 ## Start or resume
 
@@ -42,11 +42,11 @@ Read [references/run-archiving.md](references/run-archiving.md) and capture the 
 
 ### Verify the running MCP revision
 
-Before launching or resuming gameplay, call `status` through the selected MCP connection and compare its `sourceRevision.commit_id` with the required full checkout hash. Require `sourceRevision.repository: "agentscumm"` and `sourceRevision.dirty: false`. A matching package version, process start time, or current checkout alone does not establish which code the running server loaded. Missing or unverifiable provenance blocks play.
+Before launching or resuming gameplay, call `status` through the selected MCP connection and compare its `sourceRevision.commit_id` with the required full checkout hash. Require `sourceRevision.repository: "agentscumm"` and `sourceRevision.dirty: false`. A matching package version, process start time, or current checkout alone does not establish which code the running server loaded. Missing or unverifiable provenance blocks play. Record `status.scummbench` in the working run manifest, including ScummBench source revision and dirtiness. After session startup, record its ScummBench run ID and run directory too. Benchmark summaries belong to ScummBench; historical AgentSCUMM results stay unchanged.
 
 If the server revision is stale or dirty, use Codex's MCP reload or reconnect controls. Identify the exact instance before stopping any process. Preserve its configuration, data directory and saves. Save active progress before a restart. Recheck `status.sourceRevision` on the replacement and record the result in `run.json`. A game restart through `session` does not reload the MCP server.
 
-When the host cannot reconnect, open the verified checkout with Codex configured to launch the MCP server directly, or report the connection blocker. See [Codex MCP setup and recovery](references/codex-mcp.md).
+When the host cannot reconnect, open the verified checkout with Codex configured to launch `src/index.js`, which requires ScummBench, or report the connection blocker. See [Codex MCP setup and recovery](references/codex-mcp.md).
 
 ### Test MCP tools before a new run
 
@@ -108,6 +108,6 @@ Confirm completion from the game's ending or equivalent explicit evidence, such 
 
 Once the ending evidence is saved and verified, automatically call `session(operation="close_viewer", session_id=COMPLETED_SESSION_ID)` through the same MCP connection that played the run. Confirm that the returned status identifies the completed session and has `viewerOpen: false`. Honor an explicit request to keep the window open. On a pause, blocker, incomplete run, or failed evidence save, leave the spectator available. If closure fails, report it and continue finalization using the saved evidence. Preserve the game session and its history.
 
-After confirmed completion, automatically queue the repository's `scripts/finalize-run.py` helper using [the run-archiving procedure](references/run-archiving.md), this conversation's exact rollout/current turn, startup context and actual walkthrough URLs. Do this before the final gameplay reply, then finish the turn so the worker can capture its final response and usage. The worker exports and verifies all run metadata and assets, then updates local `BENCHMARKS.md` without duplicate results. This local bookkeeping is part of finishing a game; it does not authorize publishing or a Git push.
+After confirmed completion, automatically queue the repository's `scripts/finalize-run.py` helper using [the run-archiving procedure](references/run-archiving.md), this conversation's exact rollout/current turn, startup context and actual walkthrough URLs. Do this before the final gameplay reply, then finish the turn so the worker can capture its final response and usage. The worker exports and verifies all run metadata and assets, then registers results with ScummBench's `BENCHMARKS.md` without duplicate results; AgentSCUMM's historical table is not updated. This local bookkeeping is part of finishing a game; it does not authorize publishing or a Git push.
 
 Report the outcome, any blocker or user-selected limit, and the run directory. Distinguish game completion from queued or completed archiving, and report the finalization state path. On interruption or a blocker, preserve memory and hand off. Register a completed benchmark only with ending evidence.

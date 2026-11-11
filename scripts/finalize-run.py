@@ -474,48 +474,27 @@ def update_benchmark(text, stats, title):
     return "".join(lines), True
 
 
-def register_benchmark(archive, *, repo=ROOT, title=None):
-    repo, archive = Path(repo).resolve(), Path(os.path.abspath(archive))
-    require(archive.is_relative_to(repo / "runs"), "Benchmark archive must belong to this checkout")
-    require(not any(path.is_symlink() for path in [archive, *archive.parents]), "Linked benchmark archive path")
-    stats = EXPORT.verify_run(archive)
-    require(stats["status"] in ("completed", "in_progress", "stopped", "blocked"), "Invalid benchmark run status")
-    require(stats["status"] != "completed" or stats.get("completion_note"), "Completed benchmarks require ending evidence")
-    private = private_directory(repo, repo / ".internal/benchmark-registration")
-    lock = private / "update.lock"
-    acquired = False
-    deadline = time.monotonic() + 10
-    while not acquired:
-        try:
-            with lock.open("x") as stream:
-                os.chmod(lock, 0o600)
-                stream.write(str(os.getpid()))
-            acquired = True
-        except FileExistsError:
-            require(time.monotonic() < deadline, "Benchmark update lock is busy; retry registration")
-            time.sleep(0.1)
+def benchmark_root():
+    if os.environ.get("SCUMMBENCH_REGISTRY_ROOT"):
+        return Path(os.environ["SCUMMBENCH_REGISTRY_ROOT"]).resolve()
     try:
-        target = repo / "BENCHMARKS.md"
-        require(not target.is_symlink(), "Linked benchmark file")
-        original = target.read_bytes() if target.exists() else None
-        text = original.decode() if original is not None else "# Benchmarks\n\n" + BENCHMARK_NOTES
-        text, added = update_benchmark(text, stats, title)
-        if original is not None and text.encode() == original:
-            return False
-        require((target.read_bytes() if target.exists() else None) == original, "Benchmark file changed during registration; retry")
-        fd, scratch = tempfile.mkstemp(prefix=".benchmark-", dir=private)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                stream.write(text)
-            os.chmod(scratch, 0o644)
-            require((target.read_bytes() if target.exists() else None) == original, "Concurrent benchmark edit; retry")
-            os.replace(scratch, target)
-        finally:
-            if Path(scratch).exists():
-                Path(scratch).unlink()
-        return added
-    finally:
-        lock.unlink()
+        result = subprocess.run(["scummbench", "paths"], check=True, capture_output=True, text=True)
+        return Path(json.loads(result.stdout)["repository"]).resolve()
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
+        raise ValueError("ScummBench is required for result tracking; install its editable checkout. No local fallback.") from error
+
+
+def register_benchmark(archive, *, repo=ROOT, title=None):
+    command = ["scummbench", "register-archive", "--archive", str(Path(archive).absolute()),
+               "--agentscumm", str(ROOT), "--source-repo", str(Path(repo).resolve()),
+               "--store", str(benchmark_root())]
+    if title:
+        command += ["--game-title", title]
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        return bool(json.loads(result.stdout)["benchmark_added"])
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
+        raise ValueError("ScummBench registration failed; preserve the archive and retry. No AgentSCUMM result write occurred.") from error
 
 
 def finalize(request):
@@ -563,7 +542,8 @@ def finalize(request):
         state.update(status="registering_benchmark", archive=str(archive))
         atomic_json(state_file, state)
         added = register_benchmark(archive, repo=repo, title=request.get("game_title"))
-        state.update(status="completed", benchmark_added=added, verified=True,
+        state.update(status="completed", benchmark_added=added, results_owner="scummbench",
+                     benchmark_path=str(benchmark_root() / "BENCHMARKS.md"), verified=True,
                      mlflow={"status": "pending", "command": "flush-mlflow"},
                      api_cost_status=stats.get("api_cost", {}).get("status", "unavailable"),
                      total_api_price_usd=stats.get("api_cost", {}).get("total_api_price_usd"))

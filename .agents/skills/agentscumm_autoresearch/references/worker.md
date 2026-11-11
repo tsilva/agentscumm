@@ -82,3 +82,5 @@ exit telemetry remains null. The receipt establishes success, not the word
 `finished`. Preserve the starting revision in `run.json`; record outcome without
 calling the game completed. Return the trial path, process outcome, useful
 screenshots and brief evidence-based analysis. The coordinator scores separately.
+
+All trial MCP launchers require ScummBench. Before gameplay require `status.scummbench.mediated: true` and record its source revision and run ID. Never launch the internal AgentSCUMM backend as a fallback. Future archived benchmark results register in ScummBench; round-local strategy ranking remains a distinct research report.

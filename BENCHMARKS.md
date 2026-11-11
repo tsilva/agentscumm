@@ -1,5 +1,7 @@
 # Benchmarks
 
+Historical AgentSCUMM records. New results are tracked by [ScummBench](https://github.com/tsilva/scummbench/blob/main/BENCHMARKS.md); existing rows below are preserved.
+
 ## Flight of the Amazon Queen
 <!-- agentscumm:game:flight-of-the-amazon-queen -->
 

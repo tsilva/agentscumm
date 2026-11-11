@@ -12,7 +12,7 @@ To register without automatically opening a window:
 codex mcp add agentscumm -- node "$PWD/src/index.js" --no-viewer
 ```
 
-`node src/index.js` runs the stdio server directly. Its stdout is reserved for MCP protocol messages. It does not launch a game until a client calls `session` with `operation: "start"`.
+`node src/index.js` launches the mandatory ScummBench MCP gateway. The globally installed editable `scummbench` command is required. Its internal AgentSCUMM backend is not a supported direct entry point. Its stdout is reserved for MCP protocol messages. It does not launch a game until a client calls `session` with `operation: "start"`.
 
 ### Query native game state
 
@@ -258,7 +258,7 @@ mkdir -p "$HOME/.codex/skills"
 ln -s "$PWD/.agents/skills/agentscumm_play-game" "$HOME/.codex/skills/agentscumm_play-game"
 ```
 
-Before play, the skill requires a clean checkout synchronized with its configured upstream. Compare the full commit with `status.sourceRevision.commit_id` from Codex's built-in MCP connection. The MCP must report that revision and a clean startup. Reload a stale server through Codex, preserving saves and launch settings, and verify the replacement before sending input. See [Codex MCP setup and recovery](../.agents/skills/agentscumm_play-game/references/codex-mcp.md).
+Before play, verify `status.scummbench.mediated: true`; missing ScummBench blocks gameplay. The skill requires a clean checkout synchronized with its configured upstream. Compare the full commit with `status.sourceRevision.commit_id` from Codex's built-in MCP connection. The MCP must report that revision and a clean startup. Reload a stale server through Codex, preserving saves and launch settings, and verify the replacement before sending input. See [Codex MCP setup and recovery](../.agents/skills/agentscumm_play-game/references/codex-mcp.md).
 
 Use AgentSCUMM's MCP tools for all gameplay input and observations. Local run records and web research, including walkthroughs, remain available to support gameplay. Resume can restore only progress saved by the game.
 

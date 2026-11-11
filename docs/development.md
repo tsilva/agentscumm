@@ -48,9 +48,11 @@ needs continuous progress reporting during the migration.
 
 ## Runtime and verification
 
+Install the editable ScummBench checkout before the MCP tests. For disposable test journals, set `SCUMMBENCH_RUNS_DIR` to a task-owned temporary directory; finalizer tests isolate their ScummBench registry through `SCUMMBENCH_REGISTRY_ROOT`. Neither setting changes normal gameplay defaults.
+
 `pnpm test:live` launches Flight of the Amazon Queen on the configured live site through stdio MCP, opens the spectator, checks screenshot dimensions, exercises click/key/wait sequences and retry behavior, and retrieves frame history. It uses an isolated temporary profile and closes its browser processes afterward. It does not solve the game. Local verification captures stay under ignored `.internal/`.
 
-Runtime code is in `src/`: `index.js` exposes MCP, `runtime.js` owns the game lifecycle and controls, `health.js` observes mechanical runtime failures, `viewer.js` serves the spectator, `macos-app.js` builds and manages the native spectator, `history.js` bounds visual history, and `actions.js` validates and serializes input. `display.js` defines fixed crops shared by screenshots, the spectator and input. The macOS app source and bundle metadata are in `macos/`. ScummWEB remains the separate browser game runtime; this project does not copy its game payloads.
+Runtime code is in `src/`: `index.js` requires the ScummBench gateway, `server.js` exposes the internal managed MCP backend, `runtime.js` owns the game lifecycle and controls, `health.js` observes mechanical runtime failures, `viewer.js` serves the spectator, `macos-app.js` builds and manages the native spectator, `history.js` bounds visual history, and `actions.js` validates and serializes input. `display.js` defines fixed crops shared by screenshots, the spectator and input. The macOS app source and bundle metadata are in `macos/`. ScummWEB remains the separate browser game runtime; this project does not copy its game payloads.
 
 Dependency policy uses pnpm's seven-day minimum release age and blocks exotic transitive dependency sources. Lifecycle scripts are disabled; browser installation is an explicit step.
 

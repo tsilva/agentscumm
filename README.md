@@ -12,11 +12,15 @@ AgentSCUMM lets Codex play classic adventure games running on [ScummWEB](https:/
 
 Codex handles puzzle solving and keeps notes between sessions. The server supplies the game interface; no separate model API key or agent framework is required.
 
-**[See the benchmarks and recorded progress →](BENCHMARKS.md)**
+**[See current benchmark results in ScummBench →](https://github.com/tsilva/scummbench/blob/main/BENCHMARKS.md)**
+
+[Earlier AgentSCUMM results](BENCHMARKS.md) are preserved as historical records.
 
 ## Quick start
 
 Requires **Node.js 22+**, **pnpm 10**, and a graphical desktop. On macOS, also install Xcode Command Line Tools (`xcode-select --install`) for the native spectator.
+
+Install the editable [ScummBench](https://github.com/tsilva/scummbench) checkout first with `uv tool install --editable /path/to/scummbench --exclude-newer "7 days"`. Every AgentSCUMM launch now requires ScummBench; there is no direct-backend fallback.
 
 From the repository root:
 
@@ -34,7 +38,7 @@ $agentscumm_play-game Flight of the Amazon Queen
 
 Commit all checkout changes before starting or resuming play. The skill stops on staged, unstaged, or untracked changes; once the checkout is clean, it immediately creates the working run folder with the verified commit recorded in `run.json`.
 
-Before gameplay, the skill synchronizes the current branch and verifies that the MCP loaded that clean revision. Codex connects to the server through its built-in MCP client. Reload a stale connection in Codex and verify the server revision before playing. See [usage and controls](docs/usage.md#play-game-skill).
+Before gameplay, the skill synchronizes the current branch and verifies that the MCP loaded that clean revision. Codex connects through its built-in MCP client to ScummBench's gateway. Require `status.scummbench.mediated: true` before gameplay. Reload a stale connection in Codex and verify the server revision before playing. See [usage and controls](docs/usage.md#play-game-skill).
 
 AgentSCUMM can launch games with a [fixed screenshot crop](docs/usage.md#tools). Flight of the Amazon Queen and Elvira II are configured.
 
@@ -48,7 +52,7 @@ The first macOS spectator launch builds its native app automatically. For setup 
 
 - **Observe and act:** inspect screenshots, issue clicks and keys, and review recent frames when an animation or dialogue is missed.
 - **Follow the game:** watch a separate spectator that cannot send inputs or change the agent's screenshot coordinates.
-- **Preserve progress:** keep free-form memory and evidence, then queue a verified run archive and local benchmark entry after confirmed completion.
+- **Preserve progress:** keep free-form memory and evidence, then queue a verified run archive and ScummBench benchmark entry after confirmed completion.
 
 Walkthroughs are allowed unless you request unaided play. A finished tool call does not establish puzzle success; game completion requires visible ending evidence.
 

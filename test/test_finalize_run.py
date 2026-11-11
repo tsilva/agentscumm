@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -28,6 +29,13 @@ class FinalizationTests(unittest.TestCase):
         self.repo.mkdir()
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True, capture_output=True)
         (self.repo / ".gitignore").write_text("/runs/\n/.internal/\n")
+        self.bench = Path(self.temporary.name).resolve() / "scummbench"
+        self.bench.mkdir()
+        subprocess.run(["git", "init", "-q", str(self.bench)], check=True, capture_output=True)
+        (self.bench / ".gitignore").write_text("/runs/\n/.internal/\n")
+        route = patch.dict(os.environ, {"SCUMMBENCH_REGISTRY_ROOT": str(self.bench)})
+        route.start()
+        self.addCleanup(route.stop)
         self.work = FINAL.private_directory(self.repo, self.repo / ".internal/synthetic-game/run-one")
         self.rollout = self.repo / "rollout.jsonl"
         rates = self.work / "pricing-rates.json"
@@ -43,6 +51,16 @@ class FinalizationTests(unittest.TestCase):
 
     def source(self, rows):
         self.rollout.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+    def test_future_registration_preserves_the_historical_agentscumm_table(self):
+        historical = self.repo / "BENCHMARKS.md"
+        original = "# Benchmarks\n\nHistorical rows remain unchanged.\n"
+        historical.write_text(original)
+        self.source(fixture(complete=True))
+        state = FINAL.finalize(self.request)
+        self.assertEqual(state["results_owner"], "scummbench")
+        self.assertEqual(historical.read_text(), original)
+        self.assertIn("Synthetic Adventure", (self.bench / "BENCHMARKS.md").read_text())
 
     def state(self):
         return json.loads((self.work / "finalization.json").read_text())
@@ -64,6 +82,9 @@ class FinalizationTests(unittest.TestCase):
         state = FINAL.finalize(self.request)
         self.assertEqual(state["status"], "completed")
         self.assertTrue(state["verified"])
+        self.assertEqual(state["results_owner"], "scummbench")
+        self.assertEqual(state["benchmark_path"], str(self.bench / "BENCHMARKS.md"))
+        self.assertFalse((self.repo / "BENCHMARKS.md").exists())
         self.assertEqual(state["api_cost_status"], "priced")
         self.assertEqual(state["total_api_price_usd"], "0.000267")
         stats = FINAL.EXPORT.verify_run(state["archive"])
@@ -73,7 +94,7 @@ class FinalizationTests(unittest.TestCase):
         self.assertEqual(stats["skills"]["files"], 2)
         self.assertEqual(stats["agent_context"]["tools"]["coverage"], "partial")
         self.assertEqual(len(stats["agent_context"]["prompt_assets"]), 2)
-        benchmark = (self.repo / "BENCHMARKS.md").read_text()
+        benchmark = (self.bench / "BENCHMARKS.md").read_text()
         self.assertIn("Synthetic Adventure", benchmark)
         self.assertIn("| Yes |", benchmark)
         self.assertIn("test-model / high", benchmark)
@@ -82,7 +103,7 @@ class FinalizationTests(unittest.TestCase):
         self.assertNotIn("Synthetic injected asset", benchmark)
         repeated = FINAL.finalize(self.request)
         self.assertFalse(repeated["benchmark_added"])
-        self.assertEqual((self.repo / "BENCHMARKS.md").read_text(), benchmark)
+        self.assertEqual((self.bench / "BENCHMARKS.md").read_text(), benchmark)
         self.assertFalse(list(self.work.glob(".finalize-*")))
 
     def test_queue_waits_for_final_reply_and_usage_then_finishes_in_background(self):
@@ -195,12 +216,12 @@ class FinalizationTests(unittest.TestCase):
         self.assertEqual(stats["action_sequences"]["mean_length"], 8 / 3)
         self.assertEqual(stats["sessions"], sorted([SESSION, local_session]))
         self.assertEqual([r["commit_id"] for r in stats["git"]["agentscumm_gameplay_runtime"]], ["a" * 40])
-        benchmark = (self.repo / "BENCHMARKS.md").read_text()
+        benchmark = (self.bench / "BENCHMARKS.md").read_text()
         self.assertEqual(benchmark.count(stats["trajectory"]["sha256"]), 1)
         self.assertIn("| 8 | 3 <!-- agentscumm:benchmark:", benchmark)
         self.assertIn("| 0.2.0 @ aaaaaaa | Server · act, status |", benchmark)
         self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
-        self.assertEqual((self.repo / "BENCHMARKS.md").read_text(), benchmark)
+        self.assertEqual((self.bench / "BENCHMARKS.md").read_text(), benchmark)
 
     def test_wrong_turn_timeout_and_aborted_turn_never_register_completion(self):
         self.source(fixture(complete=True))
@@ -212,7 +233,7 @@ class FinalizationTests(unittest.TestCase):
         self.source(fixture() + [record("event_msg", {"type": "turn_aborted", "turn_id": "turn-1"}, 7)])
         with self.assertRaisesRegex(ValueError, "aborted"):
             FINAL.finalize(self.request)
-        self.assertFalse((self.repo / "BENCHMARKS.md").exists())
+        self.assertFalse((self.bench / "BENCHMARKS.md").exists())
         self.assertFalse(list((self.repo / "runs").glob("*/*/run.json")))
 
     def test_verification_failure_does_not_publish_benchmark(self):
@@ -223,15 +244,15 @@ class FinalizationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unavailable skill"):
             FINAL.finalize(self.request)
         self.assertEqual(self.state()["status"], "failed")
-        self.assertFalse((self.repo / "BENCHMARKS.md").exists())
+        self.assertFalse((self.bench / "BENCHMARKS.md").exists())
 
     def test_registration_failure_preserves_archive_and_can_be_retried(self):
         self.source(fixture(complete=True))
         other = self.repo / "other.md"
         other.write_text("Do not change")
-        benchmark = self.repo / "BENCHMARKS.md"
+        benchmark = self.bench / "BENCHMARKS.md"
         benchmark.symlink_to(other)
-        with self.assertRaisesRegex(ValueError, "Linked benchmark"):
+        with self.assertRaisesRegex(ValueError, "ScummBench registration failed"):
             FINAL.finalize(self.request)
         state = self.state()
         self.assertEqual(state["status"], "failed")
@@ -272,7 +293,7 @@ class FinalizationTests(unittest.TestCase):
         self.assertEqual(stats["estimated_progress_percent"], 42.5)
         self.assertEqual(FINAL.EXPORT.verify_run(archive)["estimated_progress_percent"], 42.5)
         self.assertTrue(FINAL.register_benchmark(archive, repo=self.repo))
-        self.assertIn("| ~42.5% |", (self.repo / "BENCHMARKS.md").read_text())
+        self.assertIn("| ~42.5% |", (self.bench / "BENCHMARKS.md").read_text())
         for status in ("in_progress", "blocked", "stopped"):
             stats["status"] = status
             self.assertTrue(FINAL.benchmark_row(FINAL.benchmark_cells(stats)).startswith("| ~42.5% |"))
@@ -309,7 +330,7 @@ class FinalizationTests(unittest.TestCase):
         self.assertEqual(progress["map_revision"], "a" * 64)
         log.unlink()
         self.assertTrue(FINAL.register_benchmark(archive, repo=self.repo))
-        benchmark = self.repo / "BENCHMARKS.md"
+        benchmark = self.bench / "BENCHMARKS.md"
         self.assertIn("| 2/7 · Opened the jungle river crossing |", benchmark.read_text())
         self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
         self.assertNotIn(str(profile), benchmark.read_text())
@@ -352,7 +373,7 @@ class FinalizationTests(unittest.TestCase):
     def test_comparison_table_appends_runs_as_contiguous_rows_and_preserves_notes(self):
         self.source(fixture(complete=True))
         first = FINAL.finalize(self.request)
-        path = self.repo / "BENCHMARKS.md"
+        path = self.bench / "BENCHMARKS.md"
         path.write_text(path.read_text() + "\nEditorial note retained.\n")
         rows = fixture(complete=True)
         rows[2]["payload"]["model"] = "comparison-model"
@@ -433,7 +454,7 @@ class FinalizationTests(unittest.TestCase):
             status="completed", completion_note="Ending observed")
         marker = f"<!-- agentscumm:benchmark:{stats['trajectory']['sha256']} -->"
         row = f"| ✅ | Synthetic Game | 2026-11-05 | test-model / high | Unspecified | 00:00:07 | 120 | 2 | 1 {marker} |\n"
-        path = self.repo / "BENCHMARKS.md"
+        path = self.bench / "BENCHMARKS.md"
         path.write_text("# Benchmarks\n\n" + FINAL.LEGACY_BENCHMARK_HEADER + "\n"
                         + FINAL.LEGACY_BENCHMARK_SEPARATOR + "\n" + row + "\nEditorial note preserved.\n")
         self.assertFalse(FINAL.register_benchmark(archive, repo=self.repo))
