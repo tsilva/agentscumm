@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 // Public launcher. All gameplay and mechanical MCP traffic goes through
-// ScummBench; src/server.js is an internal managed backend, not a fallback.
+// ScummBench, which connects directly to the ScummWEB backbone.
 import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-const root = fileURLToPath(new URL('../', import.meta.url));
-const child = spawn('scummbench', ['mcp', '--agentscumm', root, '--', ...process.argv.slice(2)], { stdio: 'inherit' });
+const child = spawn('scummbench', ['mcp', '--', ...process.argv.slice(2)], { stdio: 'inherit' });
 let spawnFailed = false;
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => child.kill(signal));
 child.once('error', () => {

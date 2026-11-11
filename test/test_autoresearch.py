@@ -25,6 +25,10 @@ class ResearchTests(unittest.TestCase):
         for name in "abc":
             (self.repo / f"{name}.md").write_text(f"Distinct strategy {name}")
         self.commit = "a" * 40
+        self.backbone = {"repository": "scummweb", "commit_id": "e" * 40, "dirty": False}
+        source = patch.object(research, "clean_backbone", return_value=self.backbone)
+        source.start()
+        self.addCleanup(source.stop)
         self.provider = {"origin": "http://localhost:9999", "queen_sha256": "b" * 64,
                          "runtime_assets_sha256": "c" * 64, "source_info_sha256": "d" * 64}
         self.dirty = False
@@ -65,7 +69,7 @@ class ResearchTests(unittest.TestCase):
         start = research.timestamp(dispatch["dispatched_at"])
         at = lambda seconds: (start + timedelta(seconds=seconds)).isoformat()
         session = f"session-{index}"
-        revision = {"repository": "agentscumm", "commit_id": self.commit, "dirty": False}
+        revision = dict(self.backbone)
         actions = [{"type": "click", "x": 10, "y": 10} for _ in range(count - 1)] + [{"type": "wait", "milliseconds": 100}]
         steps = [{"index": n, "type": a["type"], "state": "delivered"} for n, a in enumerate(actions)]
         if stopped:

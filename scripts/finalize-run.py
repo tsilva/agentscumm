@@ -486,7 +486,7 @@ def benchmark_root():
 
 def register_benchmark(archive, *, repo=ROOT, title=None):
     command = ["scummbench", "register-archive", "--archive", str(Path(archive).absolute()),
-               "--agentscumm", str(ROOT), "--source-repo", str(Path(repo).resolve()),
+               "--source-repo", str(Path(repo).resolve()),
                "--store", str(benchmark_root())]
     if title:
         command += ["--game-title", title]

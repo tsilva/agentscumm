@@ -8,9 +8,9 @@
 
 # AgentSCUMM
 
-AgentSCUMM lets Codex play classic adventure games running on [ScummWEB](https://scummweb.tsilva.eu). Its local MCP server gives the agent screenshots, reliable input controls, and recent visual history, while you follow along in a separate spectator window.
+AgentSCUMM lets Codex play classic adventure games running on [ScummWEB](https://scummweb.tsilva.eu). Its launcher connects to ScummBench MCP, which uses the ScummWEB backbone to give the agent screenshots, reliable input controls, and recent visual history, while you follow along in a separate spectator window.
 
-Codex handles puzzle solving and keeps notes between sessions. The server supplies the game interface; no separate model API key or agent framework is required.
+Codex handles puzzle solving and keeps notes between sessions. ScummWEB supplies the game interface through ScummBench; no separate model API key or agent framework is required.
 
 **[See current benchmark results in ScummBench →](https://github.com/tsilva/scummbench/blob/main/BENCHMARKS.md)**
 
@@ -20,7 +20,7 @@ Codex handles puzzle solving and keeps notes between sessions. The server suppli
 
 Requires **Node.js 22+**, **pnpm 10**, and a graphical desktop. On macOS, also install Xcode Command Line Tools (`xcode-select --install`) for the native spectator.
 
-Install the editable [ScummBench](https://github.com/tsilva/scummbench) checkout first with `uv tool install --editable /path/to/scummbench --exclude-newer "7 days"`. Every AgentSCUMM launch now requires ScummBench; there is no direct-backend fallback.
+Install the editable [ScummBench](https://github.com/tsilva/scummbench) checkout first with `uv tool install --editable /path/to/scummbench --exclude-newer "7 days"`. Every AgentSCUMM launch requires ScummBench and an installed ScummWEB checkout. The dependency direction is AgentSCUMM → ScummBench MCP → ScummWEB backbone. Sibling checkouts resolve automatically; other layouts set `SCUMMWEB_DIR`. See [backbone setup](../scummweb/docs/agent-backbone.md).
 
 From the repository root:
 
@@ -38,7 +38,7 @@ $agentscumm_play-game Flight of the Amazon Queen
 
 Commit all checkout changes before starting or resuming play. The skill stops on staged, unstaged, or untracked changes; once the checkout is clean, it immediately creates the working run folder with the verified commit recorded in `run.json`.
 
-Before gameplay, the skill synchronizes the current branch and verifies that the MCP loaded that clean revision. Codex connects through its built-in MCP client to ScummBench's gateway. Require `status.scummbench.mediated: true` before gameplay. Reload a stale connection in Codex and verify the server revision before playing. See [usage and controls](docs/usage.md#play-game-skill).
+Before gameplay, the skill synchronizes the current branch and verifies that the MCP loaded the clean ScummWEB backbone revision, recorded separately from the AgentSCUMM baseline. Codex connects through its built-in MCP client to ScummBench's gateway. Require `status.scummbench.mediated: true` before gameplay. Reload a stale connection in Codex and verify the server revision before playing. See [usage and controls](docs/usage.md#play-game-skill).
 
 AgentSCUMM can launch games with a [fixed screenshot crop](docs/usage.md#tools). Flight of the Amazon Queen and Elvira II are configured.
 

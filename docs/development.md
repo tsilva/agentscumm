@@ -71,3 +71,12 @@ room, without solution hints, hardcoded gameplay recipes, or prior gameplay
 discoveries. Each trial opens its own visible AgentSCUMM spectator window.
 The coordinator reviews those protocol requirements separately from the helper's
 mechanical scoring checks.
+
+## Runtime ownership
+
+New connections use AgentSCUMM → ScummBench MCP → ScummWEB backbone.
+`src/server.js` is retired and refuses new launches. Legacy mechanical modules
+and spectator resources remain available to already running sessions; new code
+must use ScummWEB's `agent-backbone/` implementation. ScummBench has no runtime
+or archive-registration dependency on this repository. Verify backbone changes
+in ScummWEB with `pnpm check:backbone` and `pnpm test:backbone`.

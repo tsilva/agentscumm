@@ -258,7 +258,7 @@ mkdir -p "$HOME/.codex/skills"
 ln -s "$PWD/.agents/skills/agentscumm_play-game" "$HOME/.codex/skills/agentscumm_play-game"
 ```
 
-Before play, verify `status.scummbench.mediated: true`; missing ScummBench blocks gameplay. The skill requires a clean checkout synchronized with its configured upstream. Compare the full commit with `status.sourceRevision.commit_id` from Codex's built-in MCP connection. The MCP must report that revision and a clean startup. Reload a stale server through Codex, preserving saves and launch settings, and verify the replacement before sending input. See [Codex MCP setup and recovery](../.agents/skills/agentscumm_play-game/references/codex-mcp.md).
+Before play, verify `status.scummbench.mediated: true`; missing ScummBench blocks gameplay. The skill requires a clean checkout synchronized with its configured upstream. Keep the clean AgentSCUMM baseline separate. Compare the clean ScummWEB checkout at `status.scummbench.backbone_directory` with `status.sourceRevision.commit_id` from Codex's built-in MCP connection; require repository `scummweb`. The MCP must report that revision and a clean startup. Reload a stale server through Codex, preserving saves and launch settings, and verify the replacement before sending input. See [Codex MCP setup and recovery](../.agents/skills/agentscumm_play-game/references/codex-mcp.md).
 
 Use AgentSCUMM's MCP tools for all gameplay input and observations. Local run records and web research, including walkthroughs, remain available to support gameplay. Resume can restore only progress saved by the game.
 

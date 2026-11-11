@@ -185,3 +185,9 @@ until the user explicitly confirms. Confirmation authorizes one new round of
 up to three fresh experiments, never an unbounded loop.
 
 All trial MCP launchers require ScummBench. Before gameplay require `status.scummbench.mediated: true` and record its source revision and run ID. Never launch the internal AgentSCUMM backend as a fallback. Future archived benchmark results register in ScummBench; round-local strategy ranking remains a distinct research report.
+
+The agent checkout baseline and the ScummWEB backbone revision are separate.
+Round initialization resolves ScummWEB through `scummbench paths`, requires its
+clean checkout, and freezes `backbone_revision`. Trial receipts must match that
+ScummWEB revision. Historical rounds without that field retain their original
+AgentSCUMM provenance contract; never relabel a historical server as ScummWEB.

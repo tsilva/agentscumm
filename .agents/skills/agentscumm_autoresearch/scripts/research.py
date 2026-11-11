@@ -103,8 +103,20 @@ def clean_commit(repo):
     return git(repo, "rev-parse", "--verify", "HEAD"), git(repo, "branch", "--show-current")
 
 
+def clean_backbone():
+    """Resolve the benchmark's selected backbone without importing agent code."""
+    result = subprocess.run(["scummbench", "paths"], check=True, capture_output=True, text=True)
+    selected = json.loads(result.stdout).get("scummweb_checkout")
+    require(isinstance(selected, str) and Path(selected).is_absolute(), "ScummWEB backbone is unavailable")
+    checkout = Path(selected).resolve()
+    require(read_json(checkout / "package.json").get("name") == "scummweb", "Not a ScummWEB checkout")
+    commit, _ = clean_commit(checkout)
+    return {"repository": "scummweb", "commit_id": commit, "dirty": False}
+
+
 def init_round(repo, args, probe=probe_provider):
     commit, branch = clean_commit(repo)
+    backbone = clean_backbone()
     require(1 <= len(args.strategy) <= 3, "A round has one to three strategies")
     require(30 <= args.timeout_seconds <= 3600, "Trial limit must be 30–3600 seconds")
     require("/.internal/" in (repo / ".gitignore").read_text().splitlines(), "Root .gitignore must exclude /.internal/")
@@ -130,7 +142,7 @@ def init_round(repo, args, probe=probe_provider):
     started = now()
     round_data = {"schema_version": 1, "state": "prepared", "game_id": GAME,
                   "round_id": round_dir.name, "created_at": started, "commit_id": commit,
-                  "branch": branch, "mode": "skip_intro", "condition": CONDITION,
+                  "branch": branch, "backbone_revision": backbone, "mode": "skip_intro", "condition": CONDITION,
                   "trial_timeout_seconds": args.timeout_seconds, "model_context": args.model_context,
                   "provider": provider, "common_sha256": sha(common),
                   "previous_round": str(previous) if previous else None, "trials": []}
@@ -207,7 +219,9 @@ def measure_trial(item, round_data, repo):
         require(launch["game"] == GAME and launch["mode"] == "skip_intro", "Different game or starting mode")
         require(timestamp(launch["timestamp"]) >= timestamp(dispatch["dispatched_at"]), "Game started before dispatch")
         revision = launch["sourceRevision"]
-        require(revision["repository"] == "agentscumm" and revision["commit_id"] == round_data["commit_id"]
+        expected_revision = round_data.get("backbone_revision") or {"repository": "agentscumm", "commit_id": round_data["commit_id"]}
+        require(revision["repository"] == expected_revision["repository"]
+                and revision["commit_id"] == expected_revision["commit_id"]
                 and revision["dirty"] is False, "Server revision mismatch or dirty startup")
         actual_url, expected_url = urlsplit(launch["url"]), urlsplit(round_data["provider"]["origin"])
         require((actual_url.scheme, actual_url.netloc) == (expected_url.scheme, expected_url.netloc),

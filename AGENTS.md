@@ -1,6 +1,6 @@
 # AgentSCUMM
 
-AgentSCUMM owns mechanical MCP controls, observations, capture history, and its spectator. All new gameplay must go through ScummBench. `src/index.js` is a required ScummBench launcher; `src/server.js` is an internal managed backend and must never be used as a fallback. Verify `status.scummbench.mediated: true` before gameplay. ScummBench owns future benchmark result registration; preserve the existing AgentSCUMM benchmark table as historical data. Keep gameplay discovery, planning, and memory outside the MCP.
+AgentSCUMM owns agent-side gameplay procedures, planning and memory. ScummWEB owns mechanical controls, observations, capture history and the spectator; ScummBench owns their public MCP interface. All new gameplay must go through ScummBench. `src/index.js` is a required ScummBench launcher; `src/server.js` is retired. ScummBench connects directly to the ScummWEB backbone and must never call back into AgentSCUMM. Verify `status.scummbench.mediated: true` before gameplay. ScummBench owns future benchmark result registration; preserve the existing AgentSCUMM benchmark table as historical data. Keep gameplay discovery, planning, and memory outside the MCP.
 
 ## Play a game
 
@@ -22,7 +22,7 @@ Use `run.json` as the run manifest. Track available-at-start tools, including no
 
 The Play Game skill must capture startup context. After verifying the ending and saving the evidence, it closes the spectator through the completed session's MCP connection and automatically queues `scripts/finalize-run.py`. Its bounded local worker waits for the exact gameplay turn's completion, exports and verifies the run, then registers the result in ScummBench's `BENCHMARKS.md` using `scummbench register-archive` idempotently. Verified archives form the local MLflow queue. Deliver them to the configured private tracker on an explicit `flush-mlflow` or `publish-mlflow` request. Report queued work as queued until `finalization.json` confirms success. Let the gameplay turn finish before checking the finalizer. Keep Git pushes and public publication outside this bookkeeping.
 
-Before gameplay, the skill synchronizes the current branch with its configured upstream and compares the required clean commit with `status.sourceRevision` from Codex’s MCP connection. Reload a stale or dirty MCP server through Codex and verify the replacement before play. Routine local inspection and reconnection are preauthorized. Preserve saves, server configuration and unrelated sessions. Unverifiable provenance blocks gameplay.
+Before gameplay, the skill synchronizes the current branch with its configured upstream and records the clean AgentSCUMM commit separately and compares the clean ScummWEB checkout with `status.sourceRevision` from Codex’s MCP connection. Reload a stale or dirty MCP server through Codex and verify the replacement before play. Routine local inspection and reconnection are preauthorized. Preserve saves, server configuration and unrelated sessions. Unverifiable provenance blocks gameplay.
 
 The gameplay skill uses AgentSCUMM's standard MCP tools through Codex’s built-in client for game input and observations. Local run records and web research such as walkthroughs remain allowed. Other browser work follows the user's normal Brave preference.
 

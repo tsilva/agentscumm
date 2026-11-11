@@ -138,10 +138,10 @@ def runtime_objects(value):
 def runtime_revisions(objects):
     for value in objects:
         revision = value.get("sourceRevision")
-        if isinstance(revision, dict) and revision.get("repository") == "agentscumm":
+        if isinstance(revision, dict) and revision.get("repository") in ("agentscumm", "scummweb"):
             commit = revision.get("commit_id")
             require(commit is None or isinstance(commit, str) and re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", commit),
-                    "Invalid recorded AgentSCUMM commit ID")
+                    "Invalid recorded game-backbone commit ID")
             yield revision
 
 
