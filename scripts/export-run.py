@@ -516,8 +516,9 @@ def snapshot_skills(source, staging, cwd, extra=()):
 
 
 class Screenshots:
-    def __init__(self, directory):
+    def __init__(self, directory, *, allow_unavailable=False):
         self.directory = directory
+        self.allow_unavailable = allow_unavailable
         self.entries = {}
         self.references = 0
         self.unresolved = []
@@ -604,8 +605,16 @@ class Screenshots:
         try:
             data = base64.b64decode(encoded, validate=True)
         except (ValueError, TypeError):
-            raise ValueError("Invalid embedded screenshot base64") from None
-        require(data, "Empty embedded screenshot")
+            data = None
+        if not data:
+            require(self.allow_unavailable, "Invalid embedded screenshot base64")
+            if not reference:
+                return None
+            gap = {"scope": "invalid_embedded_image", "reason": "Invalid or empty embedded screenshot base64",
+                   "mime_type": mime, "recorded_data": encoded,
+                   "recorded_sha256": hashlib.sha256(dump(encoded).encode()).hexdigest()}
+            self.unresolved.append({key: value for key, value in gap.items() if key != "recorded_data"})
+            return {"unavailable_image": gap}
         digest = hashlib.sha256(data).hexdigest()
         screenshot_id = f"screenshot-{digest}"
         relative = f"screenshots/{screenshot_id}.{MIMES[mime]}"
@@ -836,14 +845,17 @@ class Screenshots:
                 image.get("mimeType") == mime and self.fragment_matches(image["data"], encoded)
                 for image, (mime, encoded) in zip(images, selected)):
                 for i, (mime, encoded) in enumerate(selected):
-                    self.ordered[(record_number, i)] = self.save(encoded, mime, reference=False)["id"]
+                    ref = self.save(encoded, mime, reference=False)
+                    if ref:
+                        self.ordered[(record_number, i)] = ref["id"]
             elif len(images) == 1 and expected > 1:
                 # A single truncated data field can span several original images.
                 fragment = TRUNCATED.fullmatch(images[0]["data"])
                 if (fragment and all(mime == images[0].get("mimeType") for mime, _ in selected)
                         and selected[0][1].startswith(fragment[1]) and selected[-1][1].endswith(fragment[3])):
-                    self.spanning[(record_number, 0)] = [self.save(encoded, mime, reference=False)["id"]
-                                                         for mime, encoded in selected]
+                    refs = [self.save(encoded, mime, reference=False) for mime, encoded in selected]
+                    if all(refs):
+                        self.spanning[(record_number, 0)] = [ref["id"] for ref in refs]
 
     def recover(self, encoded, mime):
         match = TRUNCATED.fullmatch(encoded) if isinstance(encoded, str) else None
@@ -925,6 +937,8 @@ class Screenshots:
                     self.unresolved.append({"type": "image", "frame_id": frame.get("id") if frame else None, **gap})
                     return {**result, "unavailable_image": {**gap, "recorded_data": value["data"]}}
                 ref = self.save(encoded, value.get("mimeType"), frame)
+                if "unavailable_image" in ref:
+                    return {**result, **ref}
                 return {**result, "screenshot": ref, **({"source_image_truncated": True} if truncated else {})}
             if value.get("type") in ("input_image", "image_url") and "image_url" in value:
                 url = value["image_url"]
@@ -932,6 +946,9 @@ class Screenshots:
                 match = DATA_URL.fullmatch(raw) if isinstance(raw, str) else None
                 if match:
                     ref = self.save(match[2], match[1], frame)
+                    if "unavailable_image" in ref:
+                        return {**{k: v for k, v in value.items() if k != "image_url"}, **ref,
+                                "source_encoding": "data_url"}
                     return {**{k: v for k, v in value.items() if k != "image_url"},
                             "screenshot": ref, "source_encoding": "data_url"}
                 self.unresolved.append({"type": value["type"], "reason": "non-embedded image"})
@@ -956,11 +973,13 @@ class Screenshots:
 
 def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress",
                completion_note=None, walkthroughs=(), skills=(), agent_context=None, estimated_progress=None,
-               pricing_rates=None, work_dir=None):
+               pricing_rates=None, work_dir=None, allow_unavailable_images=False, action_coverage=None):
     require(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", game_id), "Invalid game ID")
     require(status in ("in_progress", "completed", "stopped", "blocked"), "Invalid run status")
     validate_progress(estimated_progress)
     require(status != "completed" or estimated_progress in (None, 100), "Completed runs require 100 percent progress")
+    require(not allow_unavailable_images or status != "completed", "Image recovery mode cannot create completed archives")
+    require(action_coverage in (None, "unavailable"), "Invalid action coverage")
     base = archive_root(repo)
     parent = safe_directory(base / game_id)
     staging = Path(tempfile.mkdtemp(prefix=".export-", dir=parent))
@@ -986,7 +1005,7 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
         acquired = True
         require(not destination.exists() and not destination.is_symlink(), "Run archive already exists")
         skill_info = snapshot_skills(source, staging, Path(header.get("cwd") or repo), skills)
-        screenshots = Screenshots(safe_directory(staging / "screenshots"))
+        screenshots = Screenshots(safe_directory(staging / "screenshots"), allow_unavailable=allow_unavailable_images)
         screenshots.prepare(source)
         counts, tools, actions, contexts = Counter(), Counter(), Counter(), []
         sequences = []
@@ -1158,6 +1177,8 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
         agent_identity = AGENT.snapshot(repo, agent_work, staging, game_id, run_id)
         if agent_identity:
             stats["agent"] = agent_identity
+        if action_coverage:
+            stats["action_coverage"] = action_coverage
         if progress:
             stats["verified_progress"] = progress
         if curve:
@@ -1186,6 +1207,19 @@ def export_run(rollout, game_id, *, repo=ROOT, run_id=None, status="in_progress"
                 pass
 
 
+def verify_image_gap(gap):
+    require(gap.get("mime_type") in MIMES and gap.get("reason") == "Invalid or empty embedded screenshot base64",
+            "Invalid unavailable image metadata")
+    encoded = gap.get("recorded_data")
+    require(hashlib.sha256(dump(encoded).encode()).hexdigest() == gap.get("recorded_sha256"),
+            "Unavailable image payload checksum mismatch")
+    try:
+        decoded = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError):
+        decoded = None
+    require(not decoded, "Available image cannot be relabeled as invalid")
+
+
 def verify_run(directory):
     directory = Path(directory)
     require(not directory.is_symlink(), "Linked run directory")
@@ -1205,6 +1239,7 @@ def verify_run(directory):
                 "Completed runs require 100 percent progress")
     verify_run_progress(stats)
     verify_progress_curve(stats)
+    require(stats.get("action_coverage") in (None, "unavailable"), "Invalid action coverage")
     AGENT.verify(directory, stats.get("agent"))
     if "total_actions" in stats or "total_action_sequences" in stats:
         for key, expected in (("total_actions", sum(stats["actions"].values())),
@@ -1234,10 +1269,15 @@ def verify_run(directory):
                 "Screenshot checksum mismatch")
     refs = Counter()
     unforwarded_fragments = 0
+    invalid_images = []
     def walk(value):
         nonlocal unforwarded_fragments
         if isinstance(value, dict):
             gap = value.get("unavailable_image")
+            invalid = isinstance(gap, dict) and gap.get("scope") == "invalid_embedded_image"
+            if invalid:
+                verify_image_gap(gap)
+                invalid_images.append({key: val for key, val in gap.items() if key != "recorded_data"})
             if isinstance(gap, dict) and gap.get("scope") == "unforwarded_mcp_result":
                 fragment = gap.get("recorded_data")
                 require(isinstance(fragment, str) and TRUNCATED.fullmatch(fragment),
@@ -1250,8 +1290,9 @@ def verify_run(directory):
                         "Screenshot reference mismatch")
                 refs[value["id"]] += 1
             require(not (value.get("type") == "image" and "data" in value), "Embedded image remains")
-            for child in value.values():
-                walk(child)
+            for key, child in value.items():
+                if not (invalid and key == "unavailable_image"):
+                    walk(child)
         elif isinstance(value, list):
             for child in value:
                 walk(child)
@@ -1271,6 +1312,8 @@ def verify_run(directory):
     require(sum(refs.values()) == stats["screenshots"]["references_in_trajectory"], "Screenshot reference count mismatch")
     require(all(refs[key] == entry["references"] for key, entry in images.items()), "Unreferenced screenshot or wrong reference count")
     unresolved = stats["screenshots"].get("unresolved", [])
+    require(invalid_images == [gap for gap in unresolved if gap.get("scope") == "invalid_embedded_image"],
+            "Unavailable image coverage mismatch")
     require(unforwarded_fragments == sum(gap.get("scope") == "unforwarded_mcp_result" for gap in unresolved),
             "Unforwarded screenshot fragment count mismatch")
     require(stats["status"] != "completed" or len(unresolved) == unforwarded_fragments,
@@ -1364,6 +1407,10 @@ def main():
     parser.add_argument("--status", choices=("in_progress", "completed", "stopped", "blocked"), default="in_progress")
     parser.add_argument("--completion-note", help="Observed ending evidence; required with completed")
     parser.add_argument("--estimated-progress", type=float, help="Declared estimated progress percentage for an unfinished run (0–100)")
+    parser.add_argument("--allow-unavailable-images", action="store_true",
+                        help="Preserve invalid image payloads as explicit gaps in unfinished archives")
+    parser.add_argument("--action-coverage", choices=("unavailable",),
+                        help="Mark legacy control paths without a complete primitive-action ledger")
     parser.add_argument("--walkthrough-url", action="append", default=[])
     parser.add_argument("--skill", type=Path, action="append", default=[],
                         help="Additional SKILL.md to bundle (repeatable); resolves unavailable named references")
@@ -1382,6 +1429,7 @@ def main():
             destination, stats = export_run(args.rollout, args.game_id, run_id=args.run_id,
                 status=args.status, completion_note=args.completion_note, walkthroughs=args.walkthrough_url,
                 skills=args.skill, agent_context=args.agent_context, estimated_progress=args.estimated_progress,
+                allow_unavailable_images=args.allow_unavailable_images, action_coverage=args.action_coverage,
                 pricing_rates=args.pricing_rates)
             print(dump({"path": str(destination), "status": stats["status"], "tokens": stats["tokens"]["total_tokens"],
                         "api_cost_status": stats["api_cost"]["status"],

@@ -147,3 +147,17 @@ A lookup failure, unsupported model/tier, stale supplied rates or unresolved cac
 ## ScummBench ownership
 
 All new gameplay uses the required ScummBench gateway. Automatic and manual finalizer registration delegates to `scummbench register-archive`; the canonical result document and registration receipts belong to ScummBench. AgentSCUMM keeps conversation archives and its existing historical benchmark table. Missing ScummBench fails explicitly; do not register a new local row as a fallback.
+
+## Recovering unfinished archives with invalid images
+
+Use `--allow-unavailable-images` only with an unfinished status to recover metrics
+when an embedded image payload is invalid. The exporter keeps that exact payload
+and checksum in an unavailable-image record, discloses the gap in screenshot
+coverage, and preserves valid screenshots normally. The default export remains
+strict; recovery mode cannot produce a completed archive. Action counts and
+native progress continue to come from their structured evidence.
+
+For historical control paths without a complete primitive-action ledger, pass
+`--action-coverage unavailable`. ScummBench displays a null total instead of
+treating zero recognized MCP submissions as zero gameplay actions. Native progress
+without verified timing is a snapshot, with no inferred actions-to-finish.

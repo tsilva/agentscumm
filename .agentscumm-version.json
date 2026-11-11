@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "version": "0.4.1",
-  "fingerprint": "ad672fb108d4c2b583dbb527f58c081673ba832d87bf7d060bc0d79caf79bb62",
-  "base_commit": "a1c1f73926942b0d0e6d5fb256400aa152e947c9",
-  "base_version": "0.4.0",
+  "version": "0.4.2",
+  "fingerprint": "b1a9d61a9da1be1209cbfc0fbf54cb819ec58467ce0a2672cf2d5eb2e64a2956",
+  "base_commit": "7f90bc4111c904b407cfaff64b4a57e787beac0f",
+  "base_version": "0.4.1",
   "level": 0
 }

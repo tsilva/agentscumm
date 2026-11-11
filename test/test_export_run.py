@@ -947,5 +947,49 @@ class ExportTests(unittest.TestCase):
             EXPORT.export_run(self.rollout, "wrong-game", repo=self.repo)
 
 
+class InvalidImageRecoveryTests(unittest.TestCase):
+    setUp = ExportTests.setUp
+    source = ExportTests.source
+    export = ExportTests.export
+
+    def test_recovery_retains_actions_and_raw_invalid_payload_without_claiming_completion(self):
+        rows = fixture()
+        native = rows[6]['payload']['item']
+        data = json.loads(native['result']['content'][0]['text'])
+        data['content'][-1]['data'] = 'not!base64'
+        native['result']['content'][0]['text'] = json.dumps(data)
+        rows[7]['payload']['output'][0]['image_url'] = 'data:image/png;base64,also!invalid'
+        self.source(rows)
+        with self.assertRaisesRegex(ValueError, 'Invalid embedded screenshot'):
+            self.export(run_id='strict')
+        path, stats = self.export(run_id='recovered', status='stopped', allow_unavailable_images=True)
+        self.assertEqual(stats['total_actions'], 2)
+        self.assertEqual(stats['actions'], {'click': 1, 'wait': 1})
+        gaps = [g for g in stats['screenshots']['unresolved'] if g.get('scope') == 'invalid_embedded_image']
+        self.assertEqual(len(gaps), 2)
+        self.assertIn('not!base64', (path / 'trajectory.jsonl').read_text())
+        self.assertEqual(EXPORT.verify_run(path), stats)
+        # ScummBench's owned verifier must independently accept the same artifact.
+        import sys
+        sys.path.insert(0, str(ROOT.parent / 'scummbench/python'))
+        from scummbench.archive_verify import verify_run
+        self.assertEqual(verify_run(path)['total_actions'], 2)
+        stats['status'] = 'completed'
+        stats['estimated_progress_percent'] = 100
+        (path / 'run.json').write_text(json.dumps(stats))
+        for verifier in (EXPORT.verify_run, verify_run):
+            with self.assertRaisesRegex(ValueError, 'Completed runs contain unavailable image'):
+                verifier(path)
+
+    def test_recovery_mode_cannot_export_completed_or_hide_valid_image_bytes(self):
+        self.source(fixture(complete=True))
+        with self.assertRaisesRegex(ValueError, 'cannot create completed'):
+            self.export(status='completed', allow_unavailable_images=True)
+        gap = {'mime_type': 'image/png', 'reason': 'Invalid or empty embedded screenshot base64',
+               'recorded_data': PNG, 'recorded_sha256': __import__('hashlib').sha256(EXPORT.dump(PNG).encode()).hexdigest()}
+        with self.assertRaisesRegex(ValueError, 'cannot be relabeled'):
+            EXPORT.verify_image_gap(gap)
+
+
 if __name__ == "__main__":
     unittest.main()
